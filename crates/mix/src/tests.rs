@@ -1606,3 +1606,28 @@ fn consolidate_many_tiny_effect_clips_stays_fast() {
     assert!((out[0][1000] - 0.5 * db_to_gain(-6.0)).abs() < 1e-6);
     assert_eq!(out[0][1001], 0.0);
 }
+
+/// A track routed to a second output path is mixed into that path's buffer, not the main mix,
+/// and a path named like the main one means the main mix.
+#[test]
+fn a_track_on_a_hardware_output_leaves_the_main_mix() {
+    let (mut s, t) = session_with_dc(0.5, 4800);
+    s.outputs.push(soundcraft_model::OutputPath { name: "Out 3-4".into(), first_channel: 2, format: ChannelFormat::Stereo });
+    s.track_mut(t).unwrap().mixer.output = Route::Hardware("Out 3-4".into());
+    let mut m = MixEngine::new(48_000.0, 512);
+    let mut out = vec![vec![0.0f32; 512]; 2];
+    m.render(&s, 0, 256, &mut out);
+    let peak = |b: &[Vec<f32>]| b.iter().flat_map(|c| c.iter().take(256)).fold(0.0f32, |a, v| a.max(v.abs()));
+    assert_eq!(peak(&out), 0.0, "nothing reaches the main mix");
+    let hw = m.hardware_outputs();
+    assert_eq!(hw.len(), 1);
+    assert_eq!((hw[0].name.as_str(), hw[0].first_channel, hw[0].buf.len()), ("Out 3-4", 2, 2));
+    assert!(peak(&hw[0].buf) > 0.1, "the track sounds on Out 3-4");
+
+    // The next block starts from silence (the path's buffer is cleared every block).
+    s.track_mut(t).unwrap().mixer.output = Route::Hardware("out 1-2".into());
+    s.outputs[0].name = "Out 1-2".into();
+    m.render(&s, 256, 256, &mut out);
+    assert_eq!(peak(&m.hardware_outputs()[0].buf), 0.0);
+    assert!(peak(&out) > 0.1, "a route naming the main path is the main mix");
+}

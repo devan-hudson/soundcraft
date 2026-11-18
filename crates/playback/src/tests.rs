@@ -715,3 +715,37 @@ fn armed_tracks_are_heard_and_metered_after_playback_stops() {
     assert!(out.iter().any(|x| x.abs() > 0.1), "the input is heard");
     assert!(shared.meters.lock().unwrap().tracks.get(&t).is_some_and(|m| m.peak[0] > 0.1), "and metered");
 }
+
+#[test]
+fn a_second_output_path_plays_on_its_own_device_channels() {
+    use soundcraft_model::{ChannelFormat, Clip, OutputPath, Route, SourceAudio, SourceId, TrackKind};
+    let mut s = soundcraft_model::Session::default();
+    s.outputs.push(OutputPath { name: "Out 3-4".into(), first_channel: 2, format: ChannelFormat::Stereo });
+    let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+    let chans = vec![vec![0.25f32; 48_000], vec![0.5f32; 48_000]];
+    s.pool.insert(SourceId(6), Arc::new(SourceAudio::new(craft_audio::AudioBuffer { sample_rate: 48_000, channels: chans })));
+    let id = s.new_clip_id();
+    let tr = s.track_mut(t).unwrap();
+    tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "x", SourceId(6), 0, 0, 48_000));
+    tr.mixer.output = Route::Hardware("Out 3-4".into());
+    let shared = Arc::new(Shared {
+        position: AtomicI64::new(0),
+        playing: AtomicBool::new(false),
+        speed: AtomicU32::new(1000),
+        meters: Mutex::new(MeterSnapshot::default()),
+    });
+    let (tx, rx) = channel();
+    let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s), 48_000.0, channel().0);
+    tx.send(Cmd::Play { from: 0, end: None, looped: None }).unwrap();
+    // A 16-channel interface: outputs 1-2 silent, the track on 3-4, the rest silent.
+    let mut out = vec![0.0f32; 16 * 256];
+    st.fill(&mut out, 16);
+    let f = &out[16 * 100..16 * 101];
+    assert_eq!((f[0], f[1]), (0.0, 0.0), "{f:?}");
+    assert!(f[2] > 0.1 && f[3] > 0.1, "{f:?}");
+    assert!(f[4..].iter().all(|x| *x == 0.0), "{f:?}");
+    // A stereo device has no channels 3-4: the path is not heard, and nothing breaks.
+    let mut out = vec![0.0f32; 2 * 256];
+    st.fill(&mut out, 2);
+    assert!(out.iter().all(|x| *x == 0.0));
+}

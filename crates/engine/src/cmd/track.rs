@@ -1014,15 +1014,49 @@ pub(crate) fn parse_route(s: &soundcraft_model::Session, v: &str) -> Route {
     }
 }
 
+/// An output named like an output path: the main path (`Route::Main`), another path of the
+/// session, or a hardware pair or channel not set up yet ("Out 3-4", "Out 5"), which is added to
+/// the session's outputs. `None` for anything else (a bus, or a name to make a bus of).
+fn output_path_route(s: &mut soundcraft_model::Session, v: &str) -> Option<Route> {
+    if let Some(i) = s.outputs.iter().position(|o| o.name.eq_ignore_ascii_case(v.trim())) {
+        return Some(if i == 0 { Route::Main } else { Route::Hardware(s.outputs.get(i)?.name.clone()) });
+    }
+    let (first, format, name) = hardware_pair(v)?;
+    if first == 0 && format == ChannelFormat::Stereo {
+        return Some(Route::Main);
+    }
+    s.outputs.push(soundcraft_model::OutputPath { name: name.clone(), first_channel: first, format });
+    Some(Route::Hardware(name))
+}
+
+/// Parses "Out N-M" (a stereo pair, M = N + 1) or "Out N" (one channel), 1-based, into the first
+/// channel (0-based), the format and the canonical name.
+fn hardware_pair(v: &str) -> Option<(u16, ChannelFormat, String)> {
+    let rest = v.trim().get(..4).filter(|p| p.eq_ignore_ascii_case("out ")).and_then(|_| v.trim().get(4..))?.trim();
+    let (a, b) = match rest.split_once('-') {
+        Some((a, b)) => (a.trim().parse::<u16>().ok()?, Some(b.trim().parse::<u16>().ok()?)),
+        None => (rest.parse::<u16>().ok()?, None),
+    };
+    if !(1..=1024).contains(&a) {
+        return None;
+    }
+    match b {
+        Some(b) if b == a + 1 => Some((a - 1, ChannelFormat::Stereo, format!("Out {a}-{b}"))),
+        Some(_) => None,
+        None => Some((a - 1, ChannelFormat::Mono, format!("Out {a}"))),
+    }
+}
+
 fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
     let key = if input { "input" } else { "output" };
     let tracks = tracks_required(e, "track.route", p)?;
     let v = str_param(p, key).ok_or_else(|| bad("track.route", format!("`{key}` required")))?.to_string();
     let create_bus = bool_or(p, "create_bus", true);
     let s = e.session_mut();
-    let mut r = parse_route(s, &v);
+    let mut r = if input { parse_route(s, &v) } else { output_path_route(s, &v).unwrap_or_else(|| parse_route(s, &v)) };
     if let Route::Hardware(name) = &r
         && create_bus
+        && !s.outputs.iter().any(|o| o.name == *name)
         && !name.to_ascii_lowercase().starts_with("in ")
     {
         let fmt = tracks
@@ -1046,6 +1080,30 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outputs_name_hardware_pairs_and_make_their_paths() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"format": "stereo", "name": "Vox"})).unwrap();
+        let out = |e: &Engine| e.session().track_by_name("Vox").unwrap().mixer.output.clone();
+        e.execute("track.output", &json!({"track": "Vox", "output": "Out 3-4"})).unwrap();
+        assert_eq!(out(&e), Route::Hardware("Out 3-4".into()));
+        let paths: Vec<(String, u16)> = e.session().outputs.iter().map(|o| (o.name.clone(), o.first_channel)).collect();
+        assert_eq!(paths, vec![("Out 1-2".to_string(), 0), ("Out 3-4".to_string(), 2)], "the pair became an output path, not a bus");
+        assert!(e.session().busses.is_empty());
+        // Asking again reuses the path; a single channel is a mono path; Out 1-2 is the main mix.
+        e.execute("track.output", &json!({"track": "Vox", "output": "out 3-4"})).unwrap();
+        assert_eq!(e.session().outputs.len(), 2);
+        e.execute("track.output", &json!({"track": "Vox", "output": "Out 9"})).unwrap();
+        assert_eq!(e.session().outputs.last().map(|o| (o.first_channel, o.format)), Some((8, ChannelFormat::Mono)));
+        e.execute("track.output", &json!({"track": "Vox", "output": "Out 1-2"})).unwrap();
+        assert_eq!(out(&e), Route::Main);
+        // Not a pair: still a bus, as before.
+        e.execute("track.output", &json!({"track": "Vox", "output": "Out 3-7"})).unwrap();
+        assert!(matches!(out(&e), Route::Bus(_)));
+        assert_eq!(hardware_pair("Out 0-1"), None);
+        assert_eq!(hardware_pair("Output 3-4"), None);
+    }
     #[test]
     fn comp_from_alternate_playlist() {
         let mut e = crate::demo::demo_engine();
