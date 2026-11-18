@@ -1147,3 +1147,112 @@ fn de_esser_wideband_turns_the_whole_signal_down() {
     let (split, wide) = (low_after(0.0), low_after(1.0));
     assert!(wide < split * 0.5, "wideband dips the low tone ({wide}) where split keeps it ({split})");
 }
+
+#[test]
+fn multiband_bands_sum_flat_and_each_band_compresses_alone() {
+    // Ratio 1:1 everywhere: the split sums back to the same level at every frequency.
+    for hz in [60.0f32, 200.0, 1000.0, 2500.0, 8000.0] {
+        let mut p = prepared("multiband_compressor");
+        for b in ["low", "mid", "high"] {
+            p.set_param(&format!("{b}_ratio"), 1.0);
+        }
+        let out = run(p.as_mut(), &[sine(hz, 0.5, 24_000)]);
+        let level = gain_to_db(rms(&out[0][12_000..]) / rms(&sine(hz, 0.5, 12_000)));
+        assert!(level.abs() < 0.3, "{hz} Hz comes out at {level} dB");
+    }
+    // A loud low tone is compressed; a quiet high tone next to it is left alone.
+    let mut p = prepared("multiband_compressor");
+    p.set_param("low_thresh", -30.0);
+    p.set_param("low_ratio", 8.0);
+    p.set_param("high_thresh", 0.0);
+    let x: Vec<f32> = sine(80.0, 0.7, 48_000).iter().zip(sine(6000.0, 0.05, 48_000)).map(|(a, b)| a + b).collect();
+    let out = run(p.as_mut(), &[x]);
+    assert!(p.gain_reduction_db() > 6.0, "the low band compresses: {}", p.gain_reduction_db());
+    let tail = &out[0][24_000..];
+    let highs: Vec<f32> = tail.windows(2).map(|w| w[1] - w[0]).collect();
+    // The 6 kHz part dominates the sample-to-sample differences; it is not turned down.
+    let ref_highs: Vec<f32> = sine(6000.0, 0.05, 24_000).windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(rms(&highs) > rms(&ref_highs) * 0.8, "the high band is untouched");
+}
+
+#[test]
+fn tape_saturation_adds_harmonics_without_jumping_in_level() {
+    let mut p = prepared("tape_saturation");
+    p.set_param("drive", 18.0);
+    let x = sine(1000.0, 0.5, 48_000);
+    let out = run(p.as_mut(), std::slice::from_ref(&x));
+    let y = &out[0][24_000..];
+    let level = gain_to_db(rms(y) / rms(&x[24_000..]));
+    assert!(level.abs() < 6.0, "level stays close: {level} dB");
+    // Harmonics: the output is no longer a pure sine at 1 kHz (compare with its best-fit sine).
+    let (mut s, mut c) = (0.0f32, 0.0f32);
+    for (i, v) in y.iter().enumerate() {
+        let ph = TAU * 1000.0 * (i + 24_000) as f32 / SR;
+        s += v * ph.sin();
+        c += v * ph.cos();
+    }
+    let (a, b) = (2.0 * s / y.len() as f32, 2.0 * c / y.len() as f32);
+    let residual: Vec<f32> = y
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let ph = TAU * 1000.0 * (i + 24_000) as f32 / SR;
+            v - (a * ph.sin() + b * ph.cos())
+        })
+        .collect();
+    assert!(rms(&residual) > rms(y) * 0.02, "drive adds harmonics");
+}
+
+#[test]
+fn stereo_imager_width_and_mono_lows() {
+    let l = sine(500.0, 0.5, 9600);
+    let r = sine(700.0, 0.4, 9600);
+    // 100 %: untouched.
+    let mut p = prepared("stereo_imager");
+    let out = run(p.as_mut(), &[l.clone(), r.clone()]);
+    assert!(out[0].iter().zip(&l).all(|(a, b)| (a - b).abs() < 1e-5));
+    // 0 %: mono.
+    let mut p = prepared("stereo_imager");
+    p.set_param("width", 0.0);
+    p.reset();
+    let out = run(p.as_mut(), &[l.clone(), r.clone()]);
+    assert!(out[0].iter().zip(&out[1]).all(|(a, b)| (a - b).abs() < 1e-5));
+    // Mono Below 300 Hz: a wide 60 Hz tone ends up centred.
+    let mut p = prepared("stereo_imager");
+    p.set_param("mono_below", 300.0);
+    let lo = sine(60.0, 0.5, 48_000);
+    let neg: Vec<f32> = lo.iter().map(|v| -v).collect();
+    let out = run(p.as_mut(), &[lo, neg]);
+    let side: Vec<f32> = out[0][24_000..].iter().zip(&out[1][24_000..]).map(|(a, b)| (a - b) * 0.5).collect();
+    assert!(rms(&side) < 0.05, "lows are mono: side {}", rms(&side));
+}
+
+#[test]
+fn linear_phase_eq_is_flat_when_flat_and_symmetric_when_not() {
+    // Flat: the output is the input, delayed by the reported latency.
+    let mut p = prepared("linear_phase_eq");
+    let latency = p.latency();
+    let mut x = vec![0.0f32; 12_000];
+    x[100] = 1.0;
+    let out = run(p.as_mut(), &[x.clone()]);
+    let pos = out[0].iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap().0;
+    assert_eq!(pos, 100 + latency);
+    assert!((out[0][pos] - 1.0).abs() < 0.02, "unity at the peak: {}", out[0][pos]);
+    // A boost: the impulse response is symmetric about its peak (no phase shift)...
+    let mut p = prepared("linear_phase_eq");
+    p.set_param("lm_gain", 9.0);
+    p.set_param("lm_freq", 1000.0);
+    let out = run(p.as_mut(), &[x]);
+    let c = 100 + latency;
+    for k in 1..400 {
+        assert!((out[0][c - k] - out[0][c + k]).abs() < 1e-3, "symmetric at ±{k}");
+    }
+    // ...and the gain at the band matches the drawn curve.
+    let mut p = prepared("linear_phase_eq");
+    p.set_param("lm_gain", 9.0);
+    p.set_param("lm_freq", 1000.0);
+    let out = run(p.as_mut(), &[sine(1000.0, 0.25, 24_000)]);
+    let got = gain_to_db(rms(&out[0][12_000..]) / rms(&sine(1000.0, 0.25, 12_000)));
+    let want = soundcraft_dsp::linear_eq_response(&[("lm_gain", 9.0), ("lm_freq", 1000.0)], &[1000.0], SR)[0];
+    assert!((got - want).abs() < 0.3, "{got} dB vs curve {want} dB");
+}

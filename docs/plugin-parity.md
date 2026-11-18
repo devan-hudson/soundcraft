@@ -1,28 +1,28 @@
 # Plugin parity: built-in processors and plugin hosting
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** trivial (Frequency Shifter; previously minor: editors: VST3 and embedded CLAP editors on Linux/X11; previously trivial: Auto Pan stereo balance) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-18 · **Change:** minor (13 processors: vocal chain, mix bus, space and delay; previously trivial: Frequency Shifter) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Pro Tools users live in plugins: the bundled set covers everyday mixing, and third-party plugins
 cover the rest. This doc tracks both. Our plugins have our own names and are written from
 scratch (clean-room rule): Avid plugin names are not used here, only categories.
 
-**Built-in plugins and AudioSuite: breadth ~40 %, ready ~35 %** (80–120 h).
+**Built-in plugins and AudioSuite: breadth ~55 %, ready ~45 %** (60–90 h).
 **Third-party hosting: breadth ~70 %, ready ~45 %** (40–60 h). Both estimated.
 
 ## Built-in processors (measured from `crates/dsp/src/plugins`)
 
 | Category | Pro Tools bundles (approx., by category) | SoundCraft (ids) | Gap |
 |---|---|---|---|
-| EQ | 1-band and 7-band EQ, channel strip, vintage EQ models | `eq_1band`, `eq_7band`, `channel_strip` | Vintage models, linear phase, dynamic EQ; parametric UI (#139) |
-| Dynamics | compressor/limiter, expander/gate, de-esser, maximizer, vintage compressors, multiband | `compressor`, `expander_gate`, `de_esser`, `maximizer` | Vintage/opto models, multiband, sidechain input (no key input anywhere) |
-| Reverb | algorithmic room/plate/hall; convolution (paid tier) | `room_reverb`, `plate_reverb` | Hall/chamber, convolution, early-reflection editor |
-| Delay | modulated delay, tape/analog delays | `mod_delay` | Tape, ping-pong, multi-tap, tempo-sync depth |
-| Modulation | chorus, flanger, phaser, tremolo, ring/frequency shift | `auto_pan`, `chorus`, `flanger`, `phaser`, `ring_mod` (ring, frequency modulation, positive and negative resonators; LFO, envelope or sample-and-hold modulation), `freq_shifter` (single-sideband shift by 0.01 Hz to 5 kHz: up, down, both ways, or down on the left and up on the right of a stereo insert; feedback and mix). Auto Pan moves the balance of a stereo track at constant power, keeping each channel on its own side and the track unchanged at the center, with an LFO (free, single, beat clock, envelope or manual trigger; rate in BPM or linked to the session tempo) or an envelope follower. | Tremolo; Auto Pan on a mono track (inserts on a mono track have one channel), LCR, quad and 5.0 outputs with Angle, Place and Spread, circular surround paths, output meters, side-chain input |
-| Harmonic | lo-fi, rectifier, amp simulation, saturation, tape, subharmonic synthesis | `lofi`, `rectifier`, `saturator`, `subharmonic` (octave-down bass from a lower and an upper band, direct bass, drive characters, HP and LP filters) | Amp and cabinet models, tape; subharmonic MIDI tuning and surround (LFE) version |
-| Pitch and time | pitch shift, varispeed effects, time shift | `pitch_shifter`, `time_shift`; the AudioSuite speed ramp (`speed_ramp`) slows a clip down to a stop or speeds it up from one, fitted to the clip's length or extended to 150 %, with or without a fade. | Formant control, pitch correction |
-| Utility | trim, gain, invert, DC offset, signal generator, dither, time adjuster | `trim`, `gain`, `invert`, `dc_offset_removal`, `signal_generator`, `dither` | Time adjuster, meter/analyzer plugins, noise shaping options |
+| EQ | 1-band and 7-band EQ, channel strip, vintage EQ models | `eq_1band`, `eq_7band`, `linear_phase_eq` (FIR by frequency sampling, partitioned convolution; HPF, shelves, two peaks, LPF; latency half the FIR plus a block), `channel_strip` | Vintage models, dynamic EQ |
+| Dynamics | compressor/limiter, expander/gate, de-esser, maximizer, vintage compressors, multiband | `compressor`, `expander_gate`, `de_esser` (split or wideband, high-pass or band-pass detection), `maximizer`, `fet_compressor` (fast FET-style, ratios to All), `opto_compressor` (optical-style, program-dependent release), `multiband_compressor` (3 bands, Linkwitz-Riley crossovers) | Sidechain input (no key input anywhere), more vintage models |
+| Reverb | algorithmic room/plate/hall; convolution (paid tier) | `room_reverb`, `plate_reverb`, `hall_reverb`, `chamber_reverb`, `convolution_reverb` (six generated spaces; no user impulse responses yet) | Loading impulse-response files, early-reflection editor |
+| Delay | modulated delay, tape/analog delays | `mod_delay`, `pingpong_delay`, `tape_delay` (wow, flutter, darkening saturated repeats); both sync to tempo | Multi-tap |
+| Modulation | chorus, flanger, phaser, tremolo, ring/frequency shift | `auto_pan`, `chorus`, `flanger`, `phaser`, `ring_mod` (ring, frequency modulation, positive and negative resonators; LFO, envelope or sample-and-hold modulation), `tremolo` (sine, triangle or square, free or synced, stereo phase), `freq_shifter` (single-sideband shift by 0.01 Hz to 5 kHz: up, down, both ways, or down on the left and up on the right of a stereo insert; feedback and mix). Auto Pan moves the balance of a stereo track at constant power, keeping each channel on its own side and the track unchanged at the center, with an LFO (free, single, beat clock, envelope or manual trigger; rate in BPM or linked to the session tempo) or an envelope follower. | Auto Pan on a mono track (inserts on a mono track have one channel), LCR, quad and 5.0 outputs with Angle, Place and Spread, circular surround paths, output meters, side-chain input |
+| Harmonic | lo-fi, rectifier, amp simulation, saturation, tape, subharmonic synthesis | `lofi`, `rectifier`, `saturator`, `tape_saturation` (emphasis, biased curve, head bump, speed), `subharmonic` (octave-down bass from a lower and an upper band, direct bass, drive characters, HP and LP filters) | Amp and cabinet models; subharmonic MIDI tuning and surround (LFE) version |
+| Pitch and time | pitch shift, varispeed effects, time shift | `pitch_shifter`, `pitch_correct` (key and scale, retune speed), `time_shift`; the AudioSuite speed ramp (`speed_ramp`) slows a clip down to a stop or speeds it up from one, fitted to the clip's length or extended to 150 %, with or without a fade. | Formant control, graphical pitch editing |
+| Utility | trim, gain, invert, DC offset, signal generator, dither, time adjuster | `trim`, `gain`, `invert`, `dc_offset_removal`, `signal_generator`, `dither`, `stereo_imager` (width, mono lows) | Time adjuster, meter/analyzer plugins, noise shaping options |
 | Instruments | several virtual instruments (multi-sampler, piano, drum machine, organ, synths, sample player; Massive X Player added in 2026.4) | `subtractive_synth`, `drum_synth`, `sampler`; `mix.instrument` takes the instrument's parameters in `params` and refuses unknown fields (#265). The sampler's ping-pong loop keeps its phase when a step is wider than the loop (#463). | Piano, organ, wavetable, content library |
-| **Total** | **≈ 80 processors and instruments** (estimate from Avid's bundle documentation) | **28 processors + 3 instruments** | |
+| **Total** | **≈ 80 processors and instruments** (estimate from Avid's bundle documentation) | **41 processors + 3 instruments** | |
 
 AudioSuite: every catalog AudioSuite leaf maps to one of our processes (`AUDIOSUITE` in
 `crates/ui-egui/src/menus.rs`), so the AudioSuite menu is 100 % present. Depth: no preview,
@@ -58,6 +58,7 @@ User report #152: a saved instrument level does not reach the bounce.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Vocal chain (FET and opto compressors, Pitch Correct, de-esser modes), mix bus (multiband, tape saturation, stereo imager, linear-phase EQ), space and delay (hall, chamber, convolution reverbs; ping-pong and tape delays; tremolo); 41 processors + 3 instruments |
 | 2026-11-09 | trivial | Modulation: Frequency Shifter (`freq_shifter`); 28 processors + 3 instruments |
 | 2026-10-27 | minor | Editors: VST3 and embedded CLAP editors on Linux/X11, with the host run loop (VST3 `IRunLoop`, CLAP timer and fd support) (#527) |
 | 2026-10-25 | trivial | Auto Pan: constant-power balance of the left and right channels; stereo passes unchanged at the center |

@@ -82,7 +82,8 @@ fn rows<'a>(col: &Column<'a>) -> Vec<Option<&'a ParamInfo>> {
         "Q" => Some(2),
         _ => None,
     };
-    if col.title.is_empty() || !col.params.iter().any(|p| role(p).is_some()) {
+    // Only EQ-style bands (those with a Freq) line up by role; other sections keep their order.
+    if col.title.is_empty() || !col.params.iter().any(|p| role(p) == Some(0)) {
         return col.params.iter().copied().map(Some).collect();
     }
     let mut out: Vec<Option<&ParamInfo>> = vec![None; col.params.len().max(3)];
@@ -325,7 +326,7 @@ pub(super) fn face(
         .inner_margin(10.0)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-            let eq = matches!(info.id, "eq_7band" | "eq_1band");
+            let eq = matches!(info.id, "eq_7band" | "eq_1band" | "linear_phase_eq");
             let dynamics = matches!(info.id, "compressor" | "expander_gate" | "maximizer");
             if eq {
                 changed.extend(eq_graph(ui, salt, info, params));
@@ -557,10 +558,10 @@ fn eq_graph(ui: &mut Ui, salt: (u64, usize), info: &'static PluginInfo, params: 
     }
     let n = 320;
     let freqs: Vec<f32> = (0..n).map(|i| 20.0 * 1000f32.powf(i as f32 / (n - 1) as f32)).collect();
-    let resp = if info.id == "eq_7band" {
-        soundcraft_dsp::eq7_response(&live, &freqs, 48_000.0)
-    } else {
-        soundcraft_dsp::eq1_response(&live, &freqs, 48_000.0)
+    let resp = match info.id {
+        "eq_7band" => soundcraft_dsp::eq7_response(&live, &freqs, 48_000.0),
+        "linear_phase_eq" => soundcraft_dsp::linear_eq_response(&live, &freqs, 48_000.0),
+        _ => soundcraft_dsp::eq1_response(&live, &freqs, 48_000.0),
     };
     let pts: Vec<Pos2> = freqs.iter().zip(&resp).map(|(f, db)| pos2(x_of(*f), y_of(*db))).collect();
     let accent = Color32::from_rgb(130, 205, 255);

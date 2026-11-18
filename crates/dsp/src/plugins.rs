@@ -6,6 +6,7 @@ pub mod dynamics;
 pub mod eq;
 pub mod freq_shifter;
 pub mod harmonic;
+pub mod mixbus;
 pub mod modulation;
 pub mod pitch;
 pub mod reverb;
@@ -22,12 +23,14 @@ use crate::{Plugin, PluginInfo};
 pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
+    &mixbus::LINEQ_INFO,
     &dynamics::COMP_INFO,
     &dynamics::GATE_INFO,
     &dynamics::DEESS_INFO,
     &vocal::FET_INFO,
     &vocal::OPTO_INFO,
     &dynamics::MAX_INFO,
+    &mixbus::MB_INFO,
     &strip::STRIP_INFO,
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
@@ -45,12 +48,14 @@ pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &modulation::RING_INFO,
     &freq_shifter::FREQ_SHIFTER_INFO,
     &harmonic::SAT_INFO,
+    &mixbus::TAPE_INFO,
     &harmonic::LOFI_INFO,
     &harmonic::RECT_INFO,
     &harmonic::SUB_INFO,
     &pitch::PITCH_INFO,
     &vocal::TUNE_INFO,
     &utility::SHIFT_INFO,
+    &mixbus::IMAGER_INFO,
     &utility::GAIN_INFO,
     &utility::TRIM_INFO,
     &utility::INVERT_INFO,
@@ -67,6 +72,10 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
     Some(match id {
         "eq_1band" => Box::new(eq::Eq1::new()),
         "eq_7band" => Box::new(eq::Eq7::new()),
+        "linear_phase_eq" => Box::new(mixbus::LinearPhaseEq::new()),
+        "multiband_compressor" => Box::new(mixbus::Multiband::new()),
+        "tape_saturation" => Box::new(mixbus::TapeSaturation::new()),
+        "stereo_imager" => Box::new(mixbus::StereoImager::new()),
         "compressor" => Box::new(dynamics::Compressor::new()),
         "expander_gate" => Box::new(dynamics::ExpanderGate::new()),
         "de_esser" => Box::new(dynamics::DeEsser::new()),

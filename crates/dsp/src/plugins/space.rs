@@ -4,12 +4,8 @@
 //! damping, early reflections): no recorded impulse responses are bundled. Convolution is uniformly
 //! partitioned overlap-save in the frequency domain, one block of latency.
 
-use std::sync::Arc;
-
-use rustfft::num_complex::Complex;
-use rustfft::{Fft, FftPlanner};
-
 use crate::biquad::{Biquad, FilterType};
+use crate::convolver::{Convolver, Plans};
 use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
 use crate::util::{DelayLine, Lfo, Rng, Smoother, flush, frames_in, ms_to_samples, sane_channels, sane_sr};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Transport, Unit};
@@ -497,7 +493,6 @@ impl Plugin for TapeDelay {
 
 /// Convolution block: one block of latency; cost per sample grows with IR length / block.
 const BLOCK: usize = 512;
-const FFT_LEN: usize = BLOCK * 2;
 /// The longest impulse response, in seconds, and the sample rate it is budgeted at: above it,
 /// fewer seconds fit (the partition count is fixed at prepare).
 const MAX_IR_SECS: f32 = 6.0;
@@ -550,34 +545,16 @@ pub static CONV_INFO: PluginInfo = PluginInfo {
     audiosuite: true,
 };
 
-/// One channel's convolution state: the IR's spectra by partition, the input spectra history
-/// (a ring), and the last two input blocks.
-struct Channel {
-    ir: Vec<Vec<Complex<f32>>>,
-    history: Vec<Vec<Complex<f32>>>,
-    input: Vec<f32>,
-}
-
 /// Convolves with a generated impulse response of the chosen space. The dry signal is delayed by
 /// the same block, so dry and wet stay aligned and the reported latency covers both.
 pub struct ConvolutionReverb {
     p: Params,
     sr: f32,
     ch: usize,
-    fwd: Option<Arc<dyn Fft<f32>>>,
-    inv: Option<Arc<dyn Fft<f32>>>,
-    scratch: Vec<Complex<f32>>,
-    work: Vec<Complex<f32>>,
-    acc: Vec<Complex<f32>>,
-    sides: Vec<Channel>,
+    /// One convolver per side (left, right).
+    sides: Vec<Convolver>,
     /// Time-domain IR being built (one side at a time).
     ir: Vec<f32>,
-    /// Partitions in use for the current IR, and the ring's write position.
-    parts: usize,
-    head: usize,
-    /// Position within the current block, and the block's wet output.
-    fill: usize,
-    wet: [Vec<f32>; 2],
     dry: Vec<DelayLine>,
     pre: [DelayLine; 2],
     low: [Biquad; 2],
@@ -585,7 +562,7 @@ pub struct ConvolutionReverb {
     mix: Smoother,
     width: Smoother,
     pre_ms: Smoother,
-    /// The IR must be rebuilt (space or length changed) before the next block.
+    /// The IR must be rebuilt (space or length changed) before the next sample.
     stale: bool,
 }
 
@@ -601,17 +578,8 @@ impl ConvolutionReverb {
             p: Params::new(&CONV_PARAMS),
             sr: 48_000.0,
             ch: 2,
-            fwd: None,
-            inv: None,
-            scratch: Vec::new(),
-            work: Vec::new(),
-            acc: Vec::new(),
             sides: Vec::new(),
             ir: Vec::new(),
-            parts: 0,
-            head: 0,
-            fill: 0,
-            wet: [Vec::new(), Vec::new()],
             dry: Vec::new(),
             pre: Default::default(),
             low: [Biquad::default(); 2],
@@ -649,9 +617,8 @@ impl ConvolutionReverb {
         }
     }
 
-    fn max_parts(&self) -> usize {
-        let samples = MAX_IR_SECS * self.sr.min(IR_BUDGET_SR);
-        (samples as usize).div_ceil(BLOCK).max(1)
+    fn max_ir(&self) -> usize {
+        (MAX_IR_SECS * self.sr.min(IR_BUDGET_SR)) as usize
     }
 
     /// Writes side `side`'s impulse response into `self.ir` and returns its length.
@@ -660,7 +627,7 @@ impl ConvolutionReverb {
         let sr = self.sr;
         let rt60 = self.rt60();
         let cap = self.ir.len();
-        let len = ((rt60 * 1.15 * sr) as usize).clamp(BLOCK, cap.max(BLOCK)).min(cap);
+        let len = ((rt60 * 1.15 * sr) as usize).clamp(BLOCK.min(cap), cap);
         let mut rng = Rng::new(0x51ce + side as u32 * 7919 + self.p.choice(0) as u32 * 104_729);
         let onset = ms_to_samples(sp.onset_ms, sr).max(1.0);
         let mut lp = 0.0f32;
@@ -704,69 +671,16 @@ impl ConvolutionReverb {
         len
     }
 
-    /// Rebuilds both sides' IR spectra. Runs on the audio thread at a block boundary when the
-    /// space or length changed; everything it writes was allocated in `prepare`.
+    /// Rebuilds both sides' impulse responses. Runs on the audio thread when the space or length
+    /// changed; everything it writes was allocated in `prepare`.
     fn rebuild(&mut self) {
         self.stale = false;
-        let Some(fwd) = self.fwd.clone() else { return };
-        let mut parts = 0;
-        for side in 0..self.sides.len().min(2) {
+        for side in 0..self.sides.len() {
             let len = self.generate(side);
-            let used = len.div_ceil(BLOCK).min(self.max_parts());
-            parts = parts.max(used);
-            let Some(ch) = self.sides.get_mut(side) else { continue };
-            for (k, spec) in ch.ir.iter_mut().enumerate() {
-                if k >= used {
-                    spec.iter_mut().for_each(|c| *c = Complex::new(0.0, 0.0));
-                    continue;
-                }
-                for (j, c) in spec.iter_mut().enumerate() {
-                    let v = if j < BLOCK { self.ir.get(k * BLOCK + j).copied().unwrap_or(0.0) } else { 0.0 };
-                    *c = Complex::new(v, 0.0);
-                }
-                fwd.process_with_scratch(spec, &mut self.scratch);
+            if let (Some(conv), Some(ir)) = (self.sides.get_mut(side), self.ir.get(..len)) {
+                conv.set_ir(ir);
             }
         }
-        self.parts = parts.max(1);
-    }
-
-    /// Convolves the block just filled into `self.wet`.
-    fn convolve(&mut self) {
-        let (Some(fwd), Some(inv)) = (self.fwd.clone(), self.inv.clone()) else { return };
-        let parts = self.parts.min(self.max_parts()).max(1);
-        let ring = self.sides.first().map_or(0, |c| c.history.len());
-        if ring == 0 {
-            return;
-        }
-        for side in 0..self.sides.len().min(2) {
-            let Some(ch) = self.sides.get_mut(side) else { continue };
-            // This block's input spectrum: the last two input blocks (overlap-save).
-            for (w, x) in self.work.iter_mut().zip(ch.input.iter()) {
-                *w = Complex::new(*x, 0.0);
-            }
-            fwd.process_with_scratch(&mut self.work, &mut self.scratch);
-            if let Some(slot) = ch.history.get_mut(self.head) {
-                slot.copy_from_slice(&self.work);
-            }
-            self.acc.iter_mut().for_each(|c| *c = Complex::new(0.0, 0.0));
-            for k in 0..parts {
-                let idx = (self.head + ring - k % ring) % ring;
-                let (Some(x), Some(h)) = (ch.history.get(idx), ch.ir.get(k)) else { continue };
-                for ((a, xv), hv) in self.acc.iter_mut().zip(x.iter()).zip(h.iter()) {
-                    *a += xv * hv;
-                }
-            }
-            inv.process_with_scratch(&mut self.acc, &mut self.scratch);
-            let norm = 1.0 / FFT_LEN as f32;
-            if let Some(out) = self.wet.get_mut(side) {
-                for (o, c) in out.iter_mut().zip(self.acc.iter().skip(BLOCK)) {
-                    *o = flush(c.re * norm);
-                }
-            }
-            // Slide the input window: the block just used becomes the older half.
-            ch.input.copy_within(BLOCK.., 0);
-        }
-        self.head = (self.head + 1) % ring;
     }
 }
 
@@ -782,26 +696,10 @@ impl Plugin for ConvolutionReverb {
     fn prepare(&mut self, sample_rate: f32, _max_block: usize, channels: usize) {
         self.sr = sane_sr(sample_rate);
         self.ch = sane_channels(channels);
-        let mut planner = FftPlanner::<f32>::new();
-        let fwd = planner.plan_fft_forward(FFT_LEN);
-        let inv = planner.plan_fft_inverse(FFT_LEN);
-        let scratch = fwd.get_inplace_scratch_len().max(inv.get_inplace_scratch_len());
-        self.scratch = vec![Complex::new(0.0, 0.0); scratch];
-        self.fwd = Some(fwd);
-        self.inv = Some(inv);
-        let parts = self.max_parts();
-        self.work = vec![Complex::new(0.0, 0.0); FFT_LEN];
-        self.acc = vec![Complex::new(0.0, 0.0); FFT_LEN];
-        let sides = self.ch.clamp(1, 2);
-        self.sides = (0..sides)
-            .map(|_| Channel {
-                ir: vec![vec![Complex::new(0.0, 0.0); FFT_LEN]; parts],
-                history: vec![vec![Complex::new(0.0, 0.0); FFT_LEN]; parts],
-                input: vec![0.0; FFT_LEN],
-            })
-            .collect();
-        self.ir = vec![0.0; parts * BLOCK];
-        self.wet = [vec![0.0; BLOCK], vec![0.0; BLOCK]];
+        let plans = Plans::new(BLOCK);
+        let max_ir = self.max_ir();
+        self.sides = (0..self.ch.clamp(1, 2)).map(|_| Convolver::new(&plans, max_ir)).collect();
+        self.ir = vec![0.0; max_ir];
         self.dry = (0..self.ch).map(|_| DelayLine::default()).collect();
         self.dry.iter_mut().for_each(|d| d.allocate(BLOCK + 2));
         let pre_max = ms_to_samples(MAX_PREDELAY_MS, self.sr) as usize + 4;
@@ -825,16 +723,10 @@ impl Plugin for ConvolutionReverb {
     }
 
     fn reset(&mut self) {
-        for ch in &mut self.sides {
-            ch.history.iter_mut().for_each(|h| h.iter_mut().for_each(|c| *c = Complex::new(0.0, 0.0)));
-            ch.input.iter_mut().for_each(|v| *v = 0.0);
-        }
-        self.wet.iter_mut().for_each(|w| w.iter_mut().for_each(|v| *v = 0.0));
+        self.sides.iter_mut().for_each(Convolver::clear);
         self.dry.iter_mut().for_each(DelayLine::clear);
         self.pre.iter_mut().for_each(DelayLine::clear);
         self.low.iter_mut().chain(self.high.iter_mut()).for_each(Biquad::reset);
-        self.head = 0;
-        self.fill = 0;
         self.mix.snap();
         self.width.snap();
         self.pre_ms.snap();
@@ -859,22 +751,23 @@ impl Plugin for ConvolutionReverb {
         }
         let frames = frames_in(io, frames, ch);
         let sr = self.sr;
+        let stereo = self.sides.len() > 1;
         for n in 0..frames {
             let (xl, xr) = (input(io, 0, n), if ch > 1 { input(io, 1, n) } else { input(io, 0, n) });
             let pre = ms_to_samples(self.pre_ms.next(), sr);
-            // Into the convolution: pre-delayed input, one side per channel (mono feeds both).
-            for (side, x) in [xl, xr].into_iter().enumerate().take(self.sides.len()) {
-                let d = &mut self.pre[side];
+            // Pre-delayed input into each side's convolver (a mono input feeds both).
+            let mut wet = [0.0f32; 2];
+            for (side, x) in [xl, xr].into_iter().enumerate() {
+                let (Some(d), Some(conv)) = (self.pre.get_mut(side), self.sides.get_mut(side)) else { continue };
                 d.push(x);
                 let v = if pre < 1.0 { x } else { d.read(pre) };
-                if let Some(slot) = self.sides.get_mut(side).and_then(|c| c.input.get_mut(BLOCK + self.fill)) {
-                    *slot = v;
-                }
+                wet[side] = conv.process(v);
             }
-            // Out of it: the previous block's wet signal, filtered and widened.
-            let w = self.wet[0].get(self.fill).copied().unwrap_or(0.0);
-            let wr = if self.sides.len() > 1 { self.wet[1].get(self.fill).copied().unwrap_or(0.0) } else { w };
-            let (wl, wr) = (self.high[0].process_sample(self.low[0].process_sample(w)), self.high[1].process_sample(self.low[1].process_sample(wr)));
+            if !stereo {
+                wet[1] = wet[0];
+            }
+            let (wl, wr) =
+                (self.high[0].process_sample(self.low[0].process_sample(wet[0])), self.high[1].process_sample(self.low[1].process_sample(wet[1])));
             let width = self.width.next();
             let mid = (wl + wr) * 0.5;
             let (wl, wr) = (mid + (wl - mid) * width, mid + (wr - mid) * width);
@@ -896,11 +789,6 @@ impl Plugin for ConvolutionReverb {
                     // Channels past the first two pass through, delayed with the rest.
                     *o = if c < 2 { dry * (1.0 - m) + wet * m } else { dry };
                 }
-            }
-            self.fill += 1;
-            if self.fill >= BLOCK {
-                self.fill = 0;
-                self.convolve();
             }
         }
     }
