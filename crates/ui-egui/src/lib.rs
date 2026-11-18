@@ -128,6 +128,14 @@ pub struct UiState {
     pub preferences_window_pos: Option<[f32; 2]>,
     pub reduce_visual_effects: preferences::ReduceVisualEffects,
     pub undo_levels: usize,
+    /// Preferences › Display › Function Tool Tips: hover tips on controls.
+    pub tool_tips: bool,
+    /// Preferences › Editing › Clip Gain Nudge Value, in dB.
+    pub clip_gain_nudge_db: f32,
+    /// Preferences › Metering › Show Track Gain Reduction Meter: the mixer's gain-reduction readout.
+    pub show_track_gr: bool,
+    /// Preferences › MIDI › Middle C: how note 60 is named.
+    pub middle_c: preferences::MiddleC,
     /// The audio device choice (Setup › Playback Engine), kept with the preferences: per machine.
     pub audio: soundcraft_playback::AudioConfig,
     /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
@@ -205,6 +213,10 @@ impl Default for UiState {
             preferences_window_pos: None,
             reduce_visual_effects: preferences::ReduceVisualEffects::default(),
             undo_levels: 64,
+            tool_tips: true,
+            clip_gain_nudge_db: 1.0,
+            show_track_gr: true,
+            middle_c: preferences::MiddleC::default(),
             audio: soundcraft_playback::AudioConfig::default(),
             mix_separate: false,
             show_io_setup: false,

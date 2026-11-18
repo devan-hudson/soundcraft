@@ -263,7 +263,7 @@ fn draw_roll_background(painter: &egui::Painter, g: &Roll<'_>) {
             painter.text(
                 pos2(key.max.x - 3.0, key.center().y),
                 Align2::RIGHT_CENTER,
-                soundcraft_midi::note_name(pitch as u8),
+                crate::preferences::note_name(pitch as u8),
                 regular(8.0),
                 Color32::from_rgb(40, 40, 40),
             );

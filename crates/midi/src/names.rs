@@ -2,8 +2,13 @@ const PITCH_CLASSES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G
 
 /// Note name using the Pro Tools convention where middle C (60) is "C3" (so 0 is "C-2").
 pub fn note_name(pitch: u8) -> String {
+    note_name_with_middle_c(pitch, 3)
+}
+
+/// Note name with middle C (60) in octave `middle_c` ("C3" or "C4" are the usual choices).
+pub fn note_name_with_middle_c(pitch: u8, middle_c: i32) -> String {
     let class = PITCH_CLASSES.get(usize::from(pitch % 12)).copied().unwrap_or("?");
-    let octave = i32::from(pitch / 12) - 2;
+    let octave = i32::from(pitch / 12) - 5 + middle_c;
     format!("{class}{octave}")
 }
 
@@ -217,5 +222,19 @@ mod tests {
         assert_eq!(gm_program_name(0), "Acoustic Grand Piano");
         assert_eq!(gm_program_name(127), "Gunshot");
         assert_eq!(gm_program_name(200), "Unknown");
+    }
+}
+
+#[cfg(test)]
+mod middle_c_tests {
+    use super::*;
+
+    #[test]
+    fn middle_c_can_be_c3_or_c4() {
+        assert_eq!(note_name(60), "C3");
+        assert_eq!(note_name(0), "C-2");
+        assert_eq!(note_name_with_middle_c(60, 4), "C4");
+        assert_eq!(note_name_with_middle_c(0, 4), "C-1");
+        assert_eq!(note_name_with_middle_c(69, 4), "A4");
     }
 }

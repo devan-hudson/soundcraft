@@ -142,6 +142,7 @@ impl SoundApp {
         let _language = crate::localization::enter(self.ui.language);
         self.ui.undo_levels = self.ui.undo_levels.clamp(1, 64);
         self.engine.set_history_limit(self.ui.undo_levels);
+        crate::preferences::apply_live(self, ctx);
         // Fonts set now take effect next frame, so draw only from the frame after.
         if !self.fonts_ready {
             if self.fonts_installed {

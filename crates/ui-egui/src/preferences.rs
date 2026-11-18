@@ -7,6 +7,69 @@ use crate::theme::{ThemeMode, Tokens};
 use egui::{Key, Modifiers, RichText, Stroke, vec2};
 use serde_json::json;
 
+/// How note 60 is named (Preferences › MIDI › Middle C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MiddleC {
+    /// The incumbent's convention: 60 is C3.
+    #[default]
+    C3,
+    /// The scientific convention: 60 is C4.
+    C4,
+    /// Numbers instead of names: 60 is "60".
+    Number,
+}
+
+impl MiddleC {
+    const ALL: [Self; 3] = [Self::C3, Self::C4, Self::Number];
+
+    /// The option's label, as the Middle C radios show it.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::C3 => "C3",
+            Self::C4 => "C4",
+            Self::Number => "MIDI Note 60",
+        }
+    }
+
+    const fn code(self) -> u8 {
+        match self {
+            Self::C3 => 0,
+            Self::C4 => 1,
+            Self::Number => 2,
+        }
+    }
+}
+
+/// The Middle C choice in effect, read wherever a note is named (set each frame by [`apply_live`]).
+static MIDDLE_C: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// A note's name as the Middle C preference asks: "C3"/"C4"-style, or its number.
+pub fn note_name(pitch: u8) -> String {
+    match MIDDLE_C.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => soundcraft_midi::note_name_with_middle_c(pitch, 4),
+        2 => pitch.to_string(),
+        _ => soundcraft_midi::note_name(pitch),
+    }
+}
+
+/// How long the pointer rests before a tool tip shows, and the delay that turns them off.
+const TOOL_TIP_DELAY: f32 = 0.4;
+const NO_TOOL_TIPS: f32 = f32::INFINITY;
+
+/// Puts the live per-machine preferences into effect: the clip gain nudge amount, the note
+/// naming, and whether tool tips show. Called every frame from `SoundApp::logic`.
+pub(crate) fn apply_live(app: &mut SoundApp, ctx: &egui::Context) {
+    let nudge = if app.ui.clip_gain_nudge_db.is_finite() { app.ui.clip_gain_nudge_db.clamp(0.1, 6.0) } else { 1.0 };
+    app.ui.clip_gain_nudge_db = nudge;
+    app.engine.clip_gain_nudge_db = f64::from(nudge);
+    MIDDLE_C.store(app.ui.middle_c.code(), std::sync::atomic::Ordering::Relaxed);
+    let delay = if app.ui.tool_tips { TOOL_TIP_DELAY } else { NO_TOOL_TIPS };
+    if ctx.global_style().interaction.tooltip_delay != delay {
+        ctx.all_styles_mut(|s| s.interaction.tooltip_delay = delay);
+    }
+}
+
 const PREFERENCES_WINDOW_WIDTH: f32 = 900.0;
 const PREFERENCES_WINDOW_HEIGHT: f32 = 945.0;
 const PREFERENCES_BODY_HEIGHT: f32 = 800.0;
@@ -121,9 +184,48 @@ struct PreferencesDraft {
     theme: ThemeMode,
     reduce_visual_effects: ReduceVisualEffects,
     undo_levels: usize,
+    live: LiveDraft,
     theme_edited: bool,
     reduce_visual_effects_edited: bool,
     undo_levels_edited: bool,
+    /// Set once the user changes any of `live` in this window.
+    live_edited: bool,
+}
+
+/// The working preferences beyond theme and undo, staged like them until OK.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LiveDraft {
+    language: crate::localization::Language,
+    follow_playback: bool,
+    tool_tips: bool,
+    clip_gain_nudge_db: f32,
+    show_track_gr: bool,
+    middle_c: MiddleC,
+}
+
+impl LiveDraft {
+    fn from_live(app: &SoundApp) -> Self {
+        Self {
+            language: app.ui.language,
+            follow_playback: app.engine.session().edit.insertion_follows_playback,
+            tool_tips: app.ui.tool_tips,
+            clip_gain_nudge_db: app.ui.clip_gain_nudge_db,
+            show_track_gr: app.ui.show_track_gr,
+            middle_c: app.ui.middle_c,
+        }
+    }
+
+    /// Puts the staged values into effect.
+    fn apply(self, app: &mut SoundApp) {
+        let _ = app.run("ui.language", json!({"language": self.language.id()}));
+        if app.engine.session().edit.insertion_follows_playback != self.follow_playback {
+            let _ = app.engine.execute("options.insertion_follows_playback", &json!({"value": self.follow_playback}));
+        }
+        app.ui.tool_tips = self.tool_tips;
+        app.ui.clip_gain_nudge_db = if self.clip_gain_nudge_db.is_finite() { self.clip_gain_nudge_db.clamp(0.1, 6.0) } else { 1.0 };
+        app.ui.show_track_gr = self.show_track_gr;
+        app.ui.middle_c = self.middle_c;
+    }
 }
 
 impl PreferencesDraft {
@@ -133,9 +235,11 @@ impl PreferencesDraft {
             theme: app.ui.theme,
             reduce_visual_effects: app.ui.reduce_visual_effects,
             undo_levels: app.ui.undo_levels,
+            live: LiveDraft::from_live(app),
             theme_edited: false,
             reduce_visual_effects_edited: false,
             undo_levels_edited: false,
+            live_edited: false,
         }
     }
 
@@ -150,6 +254,9 @@ impl PreferencesDraft {
         if !self.undo_levels_edited {
             self.undo_levels = app.ui.undo_levels;
         }
+        if !self.live_edited {
+            self.live = LiveDraft::from_live(app);
+        }
     }
 
     /// Remembers which values the user changed during the current UI frame.
@@ -157,6 +264,7 @@ impl PreferencesDraft {
         self.theme_edited |= self.theme != before.theme;
         self.reduce_visual_effects_edited |= self.reduce_visual_effects != before.reduce_visual_effects;
         self.undo_levels_edited |= self.undo_levels != before.undo_levels;
+        self.live_edited |= self.live != before.live;
     }
 }
 
@@ -189,6 +297,12 @@ enum Control {
     Theme,
     ReduceVisualEffects,
     UndoLevels,
+    Language,
+    FollowPlayback,
+    ToolTips,
+    ClipGainNudge,
+    ShowTrackGr,
+    MiddleC,
 }
 
 impl Control {
@@ -204,6 +318,12 @@ impl Control {
             Self::Theme => "UI Theme",
             Self::ReduceVisualEffects => "Reduce Visual Effects",
             Self::UndoLevels => "Levels of Undo",
+            Self::Language => "Language",
+            Self::FollowPlayback => "Timeline Insertion and Play Start Follow Playback",
+            Self::ToolTips => "Function Tool Tips",
+            Self::ClipGainNudge => "Clip Gain Nudge Value",
+            Self::ShowTrackGr => "Show Track Gain Reduction Meter",
+            Self::MiddleC => "Middle C",
         }
     }
 
@@ -219,6 +339,14 @@ impl Control {
             Self::ReduceVisualEffects => {
                 let modes = ReduceVisualEffects::ALL.map(|mode| both(mode.label())).join(" ");
                 format!("{} {modes}", both(self.label()))
+            }
+            Self::Language => {
+                let names = crate::localization::Language::ALL.map(|l| l.native_name()).join(" ");
+                format!("{} {names}", both(self.label()))
+            }
+            Self::MiddleC => {
+                let options = MiddleC::ALL.map(|m| both(m.label())).join(" ");
+                format!("{} {options}", both(self.label()))
             }
             _ => both(self.label()),
         }
@@ -237,13 +365,13 @@ const DISPLAY: &[Section] = &[
         title: "Basics",
         controls: &[
             Control::Check("Track Position Numbers Stay with Hidden Tracks"),
-            Control::Check("Function Tool Tips"),
+            Control::ToolTips,
             Control::Check("Detailed Tool Tips"),
             Control::Value("Edit Window Default Length", "00:00:00:00"),
             Control::Choice("Organize Plugin Menus By", "Category & Manufacturer"),
             Control::Choice("Organize Track I/O Menus By", "Type"),
             Control::Check("Auto-Switch Input Language"),
-            Control::Choice("Language", "English"),
+            Control::Language,
             Control::Check("Default Automatic Naming to English"),
             Control::Theme,
             Control::ReduceVisualEffects,
@@ -287,7 +415,7 @@ const OPERATION: &[Section] = &[
     Section {
         title: "Transport",
         controls: &[
-            Control::Check("Timeline Insertion and Play Start Follow Playback"),
+            Control::FollowPlayback,
             Control::Check("Edit Insertion Follows Scrub and Shuttle"),
             Control::Check("Audio During Fast Forward and Rewind"),
             Control::Check("Latch Fast Forward and Rewind"),
@@ -376,7 +504,7 @@ const EDITING: &[Section] = &[
             Control::Check("Send Fully Overlapped Clips to a Playlist While Recording"),
             Control::Check("Tab Respects Breakpoints in Automation Lanes"),
             Control::Check("Double-Click Selects Automation Breakpoints"),
-            Control::Value("Clip Gain Nudge Value", "0.5 dB"),
+            Control::ClipGainNudge,
             Control::Choice("Number Keys 1–5 Control", "Zoom Presets"),
             Control::Choice("Double-Clicking an Audio Clip Opens", "Name Dialog"),
         ],
@@ -553,7 +681,7 @@ const METERING: &[Section] = &[
         controls: &[
             Control::Check("Show Send Assignment Level Meter"),
             Control::Check("Show Insert Assignment Gain Reduction Meter"),
-            Control::Check("Show Track Gain Reduction Meter"),
+            Control::ShowTrackGr,
             Control::Radios(
                 "Gain Reduction Meter Type",
                 &["Compressor/Limiter Only", "Expander/Gate Only", "Priority Compressor/Limiter", "Priority Expander/Gate", "All — Summed"],
@@ -624,7 +752,7 @@ const MIDI: &[Section] = &[
             Control::Choice("MIDI Merge Release Mode", "Latch Until Next Event"),
         ],
     },
-    Section { title: "Note Display", controls: &[Control::Radios("Middle C", &["C3", "C4", "MIDI Note 60"])] },
+    Section { title: "Note Display", controls: &[Control::MiddleC] },
     Section {
         title: "Delay Compensation for External Devices",
         controls: &[Control::Check("MIDI Beat Clock"), Control::Check("MIDI Timecode"), Control::Check("MIDI Notes and Controllers")],
@@ -761,6 +889,11 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         });
         ui.add_space(4.0);
         tabs(ui, &mut page, &search);
+        ui.label(
+            RichText::new(crate::localization::text("Dimmed settings aren't built yet; they're on the roadmap."))
+                .small()
+                .color(Tokens::current().text_dim),
+        );
         ui.separator();
 
         // Reserve the same body height on every page. Only screens shorter than the normal window
@@ -814,6 +947,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             let _ = app.run("ui.theme", json!({"mode": draft.theme.id()}));
             let _ = app.run("ui.reduce_visual_effects", json!({"mode": draft.reduce_visual_effects.id()}));
             let _ = app.run("ui.undo_levels", json!({"levels": draft.undo_levels}));
+            draft.live.apply(app);
             open = false;
             app.preferences.discard_draft();
         }
@@ -930,6 +1064,9 @@ fn section_ui_columns(ui: &mut egui::Ui, page: PreferencesPage, section: Section
     });
 }
 
+/// What a preference that isn't built yet says when hovered.
+const COMING_LATER: &str = "Coming in a later version of SoundCraft.";
+
 /// Draws an implemented control or a disabled placeholder for unavailable behavior.
 fn control_ui(ui: &mut egui::Ui, page: PreferencesPage, section: &str, index: usize, control: Control, search: &str, draft: &mut PreferencesDraft) {
     let t = Tokens::current();
@@ -962,17 +1099,47 @@ fn control_ui(ui: &mut egui::Ui, page: PreferencesPage, section: &str, index: us
                 ui.add(egui::DragValue::new(&mut draft.undo_levels).range(1..=64));
             });
         }
+        Control::Language => {
+            craft_ui::ComboBox::new(id, label("Language")).selected_text(draft.live.language.native_name()).show_ui(ui, |ui| {
+                for language in crate::localization::Language::ALL {
+                    ui.selectable_value(&mut draft.live.language, language, language.native_name());
+                }
+            });
+        }
+        Control::FollowPlayback => {
+            ui.checkbox(&mut draft.live.follow_playback, label("Timeline Insertion and Play Start Follow Playback"));
+        }
+        Control::ToolTips => {
+            ui.checkbox(&mut draft.live.tool_tips, label("Function Tool Tips"));
+        }
+        Control::ShowTrackGr => {
+            ui.checkbox(&mut draft.live.show_track_gr, label("Show Track Gain Reduction Meter"));
+        }
+        Control::ClipGainNudge => {
+            ui.horizontal(|ui| {
+                let caption = ui.label(label("Clip Gain Nudge Value"));
+                ui.add(egui::DragValue::new(&mut draft.live.clip_gain_nudge_db).range(0.1..=6.0).speed(0.05).max_decimals(1).suffix(" dB"))
+                    .labelled_by(caption.id);
+            });
+        }
+        Control::MiddleC => {
+            ui.label(label("Middle C"));
+            ui.indent(id, |ui| {
+                for option in MiddleC::ALL {
+                    ui.radio_value(&mut draft.live.middle_c, option, crate::localization::text(option.label()));
+                }
+            });
+        }
         Control::Check(text) => {
             let mut value = false;
-            ui.add_enabled(false, egui::Checkbox::new(&mut value, label(text)))
-                .on_disabled_hover_text(crate::localization::text("This preference is not available yet."));
+            ui.add_enabled(false, egui::Checkbox::new(&mut value, label(text))).on_disabled_hover_text(crate::localization::text(COMING_LATER));
         }
         Control::Choice(text, value) | Control::ChoiceOptions(text, value, _) => {
             ui.add_enabled_ui(false, |ui| {
                 craft_ui::ComboBox::new(id, label(text)).selected_text(crate::localization::text(value)).show_ui(ui, |_| {});
             })
             .response
-            .on_disabled_hover_text(crate::localization::text("This preference is not available yet."));
+            .on_disabled_hover_text(crate::localization::text(COMING_LATER));
         }
         Control::Value(text, value) => {
             ui.add_enabled_ui(false, |ui| {
@@ -983,11 +1150,10 @@ fn control_ui(ui: &mut egui::Ui, page: PreferencesPage, section: &str, index: us
                 });
             })
             .response
-            .on_disabled_hover_text(crate::localization::text("This preference is not available yet."));
+            .on_disabled_hover_text(crate::localization::text(COMING_LATER));
         }
         Control::Button(text) => {
-            ui.add_enabled(false, egui::Button::new(label(text)))
-                .on_disabled_hover_text(crate::localization::text("This preference is not available yet."));
+            ui.add_enabled(false, egui::Button::new(label(text))).on_disabled_hover_text(crate::localization::text(COMING_LATER));
         }
         Control::Radios(text, values) => {
             ui.add_enabled_ui(false, |ui| {
@@ -1000,7 +1166,7 @@ fn control_ui(ui: &mut egui::Ui, page: PreferencesPage, section: &str, index: us
                 });
             })
             .response
-            .on_disabled_hover_text(crate::localization::text("This preference is not available yet."));
+            .on_disabled_hover_text(crate::localization::text(COMING_LATER));
         }
     }
 }
@@ -1127,6 +1293,43 @@ mod tests {
     }
 
     /// Implemented preferences use commands without becoming document edits.
+    #[test]
+    fn working_preferences_take_effect_when_applied() {
+        let mut app = SoundApp::new(Engine::default(), None, crate::Services::default());
+        let ctx = egui::Context::default();
+        let mut live = LiveDraft::from_live(&app);
+        assert!(live.tool_tips && live.show_track_gr && live.middle_c == MiddleC::C3);
+        live.language = crate::localization::Language::PortugueseBrazil;
+        live.tool_tips = false;
+        live.clip_gain_nudge_db = 0.5;
+        live.show_track_gr = false;
+        live.middle_c = MiddleC::C4;
+        live.apply(&mut app);
+        apply_live(&mut app, &ctx);
+        assert_eq!(app.ui.language, crate::localization::Language::PortugueseBrazil);
+        assert!(!app.ui.show_track_gr);
+        assert_eq!(app.engine.clip_gain_nudge_db, 0.5);
+        assert!(ctx.global_style().interaction.tooltip_delay.is_infinite(), "tool tips off");
+        assert_eq!(note_name(60), "C4");
+        assert!(!app.engine.is_dirty(), "these preferences are per machine, not part of the session");
+        // Follow Playback is the Options menu's switch, which the session keeps.
+        live.follow_playback = !live.follow_playback;
+        live.apply(&mut app);
+        assert_eq!(app.engine.session().edit.insertion_follows_playback, live.follow_playback);
+        // Hostile values are clamped rather than trusted.
+        app.ui.clip_gain_nudge_db = f32::NAN;
+        apply_live(&mut app, &ctx);
+        assert_eq!(app.engine.clip_gain_nudge_db, 1.0);
+        app.ui.middle_c = MiddleC::Number;
+        app.ui.tool_tips = true;
+        apply_live(&mut app, &ctx);
+        assert_eq!(note_name(60), "60");
+        assert_eq!(ctx.global_style().interaction.tooltip_delay, TOOL_TIP_DELAY);
+        app.ui.middle_c = MiddleC::C3;
+        apply_live(&mut app, &ctx);
+        assert_eq!(note_name(60), "C3");
+    }
+
     #[test]
     fn applying_live_preferences_uses_ui_commands_without_dirtying_the_session() {
         let mut app = SoundApp::new(Engine::default(), None, crate::Services::default());

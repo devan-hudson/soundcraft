@@ -184,6 +184,8 @@ pub struct Engine {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     pub history_limit: usize,
+    /// How far Nudge Clip Gain Up/Down moves clip gain, in dB (Preferences › Editing).
+    pub clip_gain_nudge_db: f64,
     pub clipboard: Clipboard,
     pub transport_requests: Vec<TransportRequest>,
     pub transport: TransportStatus,
@@ -228,6 +230,7 @@ impl Engine {
             undo: Vec::new(),
             redo: Vec::new(),
             history_limit: 200,
+            clip_gain_nudge_db: 1.0,
             clipboard: Clipboard::default(),
             transport_requests: Vec::new(),
             transport: TransportStatus::default(),

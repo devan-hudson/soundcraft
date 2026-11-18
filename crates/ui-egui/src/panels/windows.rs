@@ -263,7 +263,7 @@ fn event_list(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.end_row();
                 for (i, n) in notes.iter().enumerate() {
                     ui.label(egui::RichText::new(n.start.to_string()).font(mono(11.0)));
-                    ui.label(soundcraft_midi::note_name(n.pitch));
+                    ui.label(crate::preferences::note_name(n.pitch));
                     let mut v = i64::from(n.velocity);
                     if ui.add(egui::DragValue::new(&mut v).range(1..=127)).accessible_name(crate::localization::text("Note velocity")).changed() {
                         let _ = app.engine.execute("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}));

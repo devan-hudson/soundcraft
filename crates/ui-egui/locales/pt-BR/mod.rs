@@ -1616,6 +1616,8 @@ fn menu_translate(source: &str) -> Option<&'static str> {
         "{name} loaded into the sampler" => "{name} carregado no sampler",
         "SoundCraft Preferences" => "Preferências do SoundCraft",
         "This preference is not available yet." => "Esta preferência ainda não está disponível.",
+        "Coming in a later version of SoundCraft." => "Disponível em uma versão futura do SoundCraft.",
+        "Dimmed settings aren't built yet; they're on the roadmap." => "As configurações esmaecidas ainda não foram implementadas; estão no roteiro.",
         "Additional Empty Bars in the Score Editor" => "Compassos vazios adicionais no editor de partitura",
         "Add New Playlists" => "Adicionar novas playlists",
         "Adjusting Pinned Area Resizes Tracks" => "Ajustar a área fixada redimensiona as pistas",

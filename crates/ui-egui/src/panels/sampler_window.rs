@@ -33,7 +33,7 @@ pub fn whole_number(plugin: &str, param: &str) -> bool {
 pub fn format_param(plugin: &str, p: &soundcraft_dsp::ParamInfo, value: f32) -> String {
     if plugin == SAMPLER && NOTE_PARAMS.contains(&p.id) {
         let n = value.round().clamp(0.0, 127.0) as u8;
-        return format!("{} ({n})", soundcraft_midi::note_name(n));
+        return format!("{} ({n})", crate::preferences::note_name(n));
     }
     if whole_number(plugin, p.id) {
         return format!("{:.0}", value.round());
@@ -270,7 +270,7 @@ mod tests {
     fn notes_show_by_name() {
         let info = soundcraft_dsp::plugin_info(SAMPLER).unwrap();
         let root = info.param("root_note").unwrap();
-        assert_eq!(format_param(SAMPLER, root, 60.0), format!("{} (60)", soundcraft_midi::note_name(60)));
+        assert_eq!(format_param(SAMPLER, root, 60.0), format!("{} (60)", crate::preferences::note_name(60)));
         assert_eq!(format_param(SAMPLER, info.param("vel_high").unwrap(), 126.6), "127");
         assert_eq!(format_param(SAMPLER, info.param("attack").unwrap(), 1.0), "1.0 ms");
         assert!(whole_number(SAMPLER, "key_low") && !whole_number(SAMPLER, "attack") && !whole_number("subtractive_synth", "root_note"));

@@ -683,7 +683,7 @@ fn fader_and_meter(app: &mut SoundApp, ui: &mut Ui, cx: &StripCtx<'_>, y: f32, s
     } else {
         meter(ui, mr, md.level[0], md.hold[0], md.clip);
     }
-    if md.gr > 0.1 {
+    if md.gr > 0.1 && app.ui.show_track_gr {
         ui.painter().text(pos2(mr.center().x, mr.min.y - 3.0), Align2::CENTER_BOTTOM, format!("-{:.0}", md.gr), regular(8.0), t.meter_yellow);
     }
 }

@@ -391,9 +391,12 @@ fn gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": ids.len()}))
 }
 
-fn nudge_gain(e: &mut Engine, p: &Value, db: f64) -> Result<Value> {
+/// Nudges by the engine's clip gain nudge amount in the direction of `sign` (+1 or -1).
+fn nudge_gain(e: &mut Engine, p: &Value, sign: f64) -> Result<Value> {
     let clips = clip_ids_param(e, p);
-    gain(e, &json!({"clips": clips, "delta_db": db}))
+    // A hostile or unset amount falls back to 1 dB; the preference caps it at 0.1..=6 dB.
+    let step = if e.clip_gain_nudge_db.is_finite() { e.clip_gain_nudge_db.clamp(0.1, 6.0) } else { 1.0 };
+    gain(e, &json!({"clips": clips, "delta_db": step * sign}))
 }
 
 /// Sync point 0 is "none" (edit_window only draws one when > 0).
@@ -530,6 +533,20 @@ mod tests {
         assert_eq!(r["restored"], 0);
         let src = e.session().find_clip(clip.id).and_then(|(_, c)| c.source()).unwrap();
         assert!(e.session().source(src).is_some());
+    }
+
+    #[test]
+    fn gain_nudge_uses_the_preferred_amount() {
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id;
+        let gain = |e: &crate::Engine| e.session().find_clip(kick).unwrap().1.gain_db;
+        e.execute("edit.select", &json!({"clips": [kick.0]})).unwrap();
+        e.clip_gain_nudge_db = 0.5;
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        assert_eq!(gain(&e), 0.5);
+        e.clip_gain_nudge_db = f64::NAN;
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        assert_eq!(gain(&e), 1.5, "a NaN amount falls back to 1 dB");
     }
 
     #[test]
