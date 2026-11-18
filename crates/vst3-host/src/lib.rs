@@ -51,6 +51,10 @@ mod ffi;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin;
 #[cfg(not(target_arch = "wasm32"))]
+mod probe;
+#[cfg(not(target_arch = "wasm32"))]
+pub use probe::{PROBE_FLAG, ProbeResult, ScanFailure};
+#[cfg(not(target_arch = "wasm32"))]
 mod registry;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -80,7 +84,7 @@ pub fn parse_id(id: &str) -> Option<[u8; 16]> {
 }
 
 /// One plugin found by a scan.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Vst3Descriptor {
     /// SoundCraft id: `vst3:<class_id>`.
     pub id: String,
@@ -145,6 +149,24 @@ mod api {
     pub fn shutdown() {
         ffi::exit_modules();
     }
+    pub fn configure(cache_file: Option<PathBuf>, probe_program: Option<PathBuf>) {
+        crate::probe::configure(cache_file, probe_program);
+    }
+    pub fn set_scan_timeout(t: std::time::Duration) {
+        crate::probe::set_timeout(t);
+    }
+    pub fn run_probe_if_requested() -> Option<i32> {
+        crate::probe::run_probe_if_requested()
+    }
+    pub fn scan_progress() -> Option<(usize, usize)> {
+        crate::probe::progress()
+    }
+    pub fn scan_in_background(rescan: bool) -> bool {
+        registry::scan_in_background(rescan)
+    }
+    pub fn last_scan_failures() -> Vec<crate::ScanFailure> {
+        registry::last_scan_failures()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -176,6 +198,28 @@ mod api {
         None
     }
     pub fn shutdown() {}
+    pub fn configure(_cache_file: Option<PathBuf>, _probe_program: Option<PathBuf>) {}
+    pub fn set_scan_timeout(_t: std::time::Duration) {}
+    pub fn run_probe_if_requested() -> Option<i32> {
+        None
+    }
+    pub fn scan_progress() -> Option<(usize, usize)> {
+        None
+    }
+    pub fn scan_in_background(_rescan: bool) -> bool {
+        false
+    }
+    pub fn last_scan_failures() -> Vec<crate::ScanFailure> {
+        Vec::new()
+    }
+}
+
+/// A bundle that could not be scanned, and why (on `wasm32` nothing is scanned).
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ScanFailure {
+    pub path: PathBuf,
+    pub reason: String,
 }
 
 /// Every plugin in the standard VST3 folders, `VST3_PATH` and folders added with
@@ -213,6 +257,43 @@ pub fn cached() -> Option<Vec<Vst3Descriptor>> {
 /// (HALion Sonic crashes in its module exit after it has been used).
 pub fn shutdown() {
     api::shutdown()
+}
+
+/// Sets where scan results are cached on disk (`None`: memory only) and which program probes
+/// each bundle in a child process (`None`: load bundles in this process). The probe program must
+/// call [`run_probe_if_requested`] first thing in `main`; it is normally `std::env::current_exe()`.
+/// With a probe program, a plugin that hangs, crashes or fails while loading costs one time-out
+/// and is recorded as failed instead of stalling or killing the scan; with a cache, unchanged
+/// bundles (failed ones included) are not loaded again until [`rescan`].
+pub fn configure(cache_file: Option<PathBuf>, probe_program: Option<PathBuf>) {
+    api::configure(cache_file, probe_program)
+}
+
+/// How long one bundle may take to load in its probe process (default 30 s).
+pub fn set_scan_timeout(timeout: std::time::Duration) {
+    api::set_scan_timeout(timeout)
+}
+
+/// The probe entry point: when this process was started as `<program> --vst3-probe <bundle>`,
+/// scans the bundle, prints the result for the parent and returns the exit code; otherwise `None`.
+pub fn run_probe_if_requested() -> Option<i32> {
+    api::run_probe_if_requested()
+}
+
+/// `(done, total)` bundles of the scan running now, or `None`.
+pub fn scan_progress() -> Option<(usize, usize)> {
+    api::scan_progress()
+}
+
+/// Starts a scan (or, with `rescan`, a rescan) on a background thread unless one is running.
+/// Returns whether it started one. [`cached`] holds the result once it is done.
+pub fn scan_in_background(rescan: bool) -> bool {
+    api::scan_in_background(rescan)
+}
+
+/// The bundles the last scan could not load, with the reason.
+pub fn last_scan_failures() -> Vec<ScanFailure> {
+    api::last_scan_failures()
 }
 
 /// The audio module classes in one `.vst3` bundle or file.

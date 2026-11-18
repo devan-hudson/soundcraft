@@ -12,7 +12,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "List VST3 Plugins",
         [],
         None,
-        "{rescan?: bool} → [{id: \"vst3:<class id hex>\", class_id, name, vendor, version, sdk_version, sub_categories, category, is_instrument, path}]",
+        "{rescan?: bool, report?: bool} → [{id: \"vst3:<class id hex>\", class_id, name, vendor, version, sdk_version, sub_categories, category, is_instrument, path}]; with report: {plugins: [..], failed: [{path, reason}]}",
         always,
         |_, p| {
             let list = if p.get("rescan").and_then(Value::as_bool).unwrap_or(false) {
@@ -20,6 +20,9 @@ pub fn specs() -> Vec<CommandSpec> {
             } else {
                 soundcraft_vst3_host::scan()
             };
+            if p.get("report").and_then(Value::as_bool).unwrap_or(false) {
+                return Ok(json!({"plugins": list, "failed": soundcraft_vst3_host::last_scan_failures()}));
+            }
             Ok(json!(list))
         }
     )]

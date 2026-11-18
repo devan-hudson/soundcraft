@@ -145,14 +145,21 @@ fn plugin_search(ui: &mut Ui, search: &MenuSearch, instruments: bool) -> Option<
     if n == 0 {
         ui.weak(crate::localization::text("No matches"));
     }
-    if clap.is_none() || vst3.is_none() {
+    let vst3_progress = soundcraft_vst3_host::scan_progress();
+    if clap.is_none() || vst3.is_none() || vst3_progress.is_some() {
         ui.separator();
         ui.horizontal(|ui| {
             if clap.is_none() && ui.small_button(crate::localization::text("Scan CLAP")).clicked() {
                 soundcraft_clap_host::scan();
             }
-            if vst3.is_none() && ui.small_button(crate::localization::text("Scan VST3")).clicked() {
-                soundcraft_vst3_host::scan();
+            if let Some((done, total)) = vst3_progress {
+                // The scan runs on its own thread; keep the menu repainting until it finishes.
+                ui.spinner();
+                ui.weak(format!("{} {done}/{total}", crate::localization::text("Scanning VST3…")));
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            } else if vst3.is_none() && ui.small_button(crate::localization::text("Scan VST3")).clicked() {
+                crate::start_vst3_scan(false);
+                ui.ctx().request_repaint();
             }
         });
     }
@@ -265,9 +272,30 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
         }
     });
     ui.menu_button(crate::localization::text("VST3"), |ui| {
-        let list = soundcraft_vst3_host::scan().into_iter().filter(|d| d.is_instrument == instruments);
+        // The first scan can take minutes with a large plugin folder, so it runs in the
+        // background (each plugin probed in a child process) and the submenu shows its progress.
+        let Some(found) = soundcraft_vst3_host::cached().filter(|_| soundcraft_vst3_host::scan_progress().is_none()) else {
+            crate::start_vst3_scan(false);
+            let (done, total) = soundcraft_vst3_host::scan_progress().unwrap_or((0, 0));
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(format!("{} {done}/{total}", crate::localization::text("Scanning VST3…")));
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            return;
+        };
+        let list = found.into_iter().filter(|d| d.is_instrument == instruments);
         if let Some(p) = vendor_menus(ui, list.map(|d| MenuPlugin { id: d.id, name: d.name, vendor: d.vendor }).collect(), "No VST3 plugins found") {
             picked = Some(p);
+        }
+        let failed = soundcraft_vst3_host::last_scan_failures().len();
+        ui.separator();
+        if failed > 0 {
+            ui.weak(format!("{failed} {}", crate::localization::text("VST3 bundles skipped (failed or hung while loading)")))
+                .on_hover_text(soundcraft_vst3_host::last_scan_failures().iter().take(40).map(|f| format!("{}: {}", f.path.display(), f.reason)).collect::<Vec<_>>().join("\n"));
+        }
+        if ui.small_button(crate::localization::text("Rescan VST3")).clicked() {
+            crate::start_vst3_scan(true);
         }
     });
     if cfg!(target_os = "macos") {

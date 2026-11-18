@@ -43,6 +43,20 @@ pub fn shutdown_plugin_hosts() {
     soundcraft_vst3_host::shutdown();
 }
 
+/// The plugin-scanner entry point. Call it first thing in `main` of every program passed to
+/// [`configure_plugin_scan`]: when the process was started to probe one plugin bundle, it scans
+/// that bundle, prints the result for the parent process and returns the exit code to end with.
+pub fn run_plugin_probe_if_requested() -> Option<i32> {
+    soundcraft_vst3_host::run_probe_if_requested()
+}
+
+/// Makes VST3 scans load each plugin in a child process running `probe_program` (normally this
+/// program, `std::env::current_exe()`), so a plugin that hangs or crashes while loading is timed
+/// out and skipped instead of stalling the scan, and caches every result in `cache_file`.
+pub fn configure_plugin_scan(cache_file: Option<std::path::PathBuf>, probe_program: Option<std::path::PathBuf>) {
+    soundcraft_vst3_host::configure(cache_file, probe_program);
+}
+
 /// A new [`soundcraft_model::AutoName::id`] for a scheme in `s`: a hash of a counter, never 0 and
 /// not held by another scheme in `s`. Native builds seed the hash from the system, so each run of
 /// the app gives other ids.
