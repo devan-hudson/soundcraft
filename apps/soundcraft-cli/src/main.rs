@@ -9,7 +9,10 @@ fn main() {
     }
     // Scans load each plugin in a child copy of this program; `SOUNDCRAFT_VST3_CACHE` names a
     // file to cache the results in between runs.
-    soundcraft_engine::configure_plugin_scan(std::env::var_os("SOUNDCRAFT_VST3_CACHE").filter(|v| !v.is_empty()).map(Into::into), std::env::current_exe().ok());
+    soundcraft_engine::configure_plugin_scan(
+        std::env::var_os("SOUNDCRAFT_VST3_CACHE").filter(|v| !v.is_empty()).map(Into::into),
+        std::env::current_exe().ok(),
+    );
     soundcraft_cli::logger::install();
     // `args_os`, not `args`: a non-Unicode argument must reach clap, not panic before anything is printed.
     let code = soundcraft_cli::run(std::env::args_os().skip(1), &mut std::io::stdout(), &mut std::io::stderr());

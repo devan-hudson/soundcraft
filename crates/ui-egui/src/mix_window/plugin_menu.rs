@@ -291,8 +291,14 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
         let failed = soundcraft_vst3_host::last_scan_failures().len();
         ui.separator();
         if failed > 0 {
-            ui.weak(format!("{failed} {}", crate::localization::text("VST3 bundles skipped (failed or hung while loading)")))
-                .on_hover_text(soundcraft_vst3_host::last_scan_failures().iter().take(40).map(|f| format!("{}: {}", f.path.display(), f.reason)).collect::<Vec<_>>().join("\n"));
+            ui.weak(format!("{failed} {}", crate::localization::text("VST3 bundles skipped (failed or hung while loading)"))).on_hover_text(
+                soundcraft_vst3_host::last_scan_failures()
+                    .iter()
+                    .take(40)
+                    .map(|f| format!("{}: {}", f.path.display(), f.reason))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
         }
         if ui.small_button(crate::localization::text("Rescan VST3")).clicked() {
             crate::start_vst3_scan(true);

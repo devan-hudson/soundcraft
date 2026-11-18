@@ -32,6 +32,8 @@ const CACHE_VERSION: u32 = 1;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Most child processes probing at once.
 const MAX_WORKERS: usize = 8;
+/// Start of the reason recorded for a probe that ran out of time.
+const TIMED_OUT: &str = "timed out after";
 /// How long a child that has answered may take to exit before it is killed (module teardown can hang).
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 
@@ -202,7 +204,7 @@ fn probe_out_of_process(program: &Path, bundle: &Path, timeout: Duration) -> Pro
     };
     match answer {
         Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| ProbeResult::Err(format!("unreadable scanner answer: {e}"))),
-        Err(RecvTimeoutError::Timeout) => ProbeResult::Err(format!("timed out after {} s (the plugin hung while loading)", timeout.as_secs())),
+        Err(RecvTimeoutError::Timeout) => ProbeResult::Err(format!("{TIMED_OUT} {} s (the plugin hung while loading)", timeout.as_secs())),
         Err(RecvTimeoutError::Disconnected) => ProbeResult::Err(match status {
             Some(s) => format!("the plugin crashed while loading ({s})"),
             None => "the plugin crashed while loading".to_string(),
@@ -332,7 +334,24 @@ fn run_probes(bundles: &[PathBuf], todo: &[usize], cfg: &Config) -> Vec<(usize, 
             });
         }
     });
-    out.into_inner().unwrap_or_else(PoisonError::into_inner)
+    let mut out = out.into_inner().unwrap_or_else(PoisonError::into_inner);
+    // Some vendors' plugins wait on each other (a shared licence or settings file) and hang only
+    // when several load at once: on one machine Harrison's bundles timed out in the parallel pass
+    // yet each loads alone in seconds. Give every timed-out bundle one more try, alone, with
+    // twice the time.
+    if workers > 1 {
+        for (i, r) in &mut out {
+            if matches!(r, ProbeResult::Err(e) if e.starts_with(TIMED_OUT)) {
+                let again = probe_out_of_process(program, &bundles[*i], cfg.timeout.saturating_mul(2));
+                match &again {
+                    ProbeResult::Ok(_) => log::info!("VST3 {}: loaded when probed alone", bundles[*i].display()),
+                    ProbeResult::Err(e) => log::warn!("VST3 {}: {e} (alone)", bundles[*i].display()),
+                }
+                *r = again;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -367,6 +386,36 @@ mod tests {
         assert!(load_cache(&f).entries.is_empty());
         std::fs::write(&f, "not json").unwrap();
         assert!(load_cache(&f).entries.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A stand-in probe program: answers at once for `fast.vst3`, never for `hang.vst3`, and
+    /// exits without answering (as a crash would) for anything else.
+    #[cfg(unix)]
+    fn fake_probe(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("fake-probe.sh");
+        let script = format!(
+            "#!/bin/sh\ncase \"$2\" in\n  *fast.vst3) echo 'plugin chatter'; echo '{MARKER}{{\"ok\":[]}}' ;;\n  *hang.vst3) sleep 30 ;;\n  *) exit 3 ;;\nesac\n"
+        );
+        std::fs::write(&p, script).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hanging_and_crashing_plugins_are_failures_not_stalls() {
+        let d = tmp("fake");
+        let program = fake_probe(&d);
+        let t = Duration::from_secs(1);
+        assert_eq!(probe_out_of_process(&program, Path::new("fast.vst3"), t), ProbeResult::Ok(vec![]));
+        let started = Instant::now();
+        let hung = probe_out_of_process(&program, Path::new("hang.vst3"), t);
+        assert!(matches!(hung, ProbeResult::Err(ref e) if e.starts_with(TIMED_OUT)), "{hung:?}");
+        assert!(started.elapsed() < Duration::from_secs(10), "the hung child was killed, not waited for");
+        let crashed = probe_out_of_process(&program, Path::new("other.vst3"), t);
+        assert!(matches!(crashed, ProbeResult::Err(ref e) if e.contains("crashed")), "{crashed:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
