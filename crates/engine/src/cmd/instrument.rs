@@ -195,6 +195,7 @@ mod tests {
 
     #[test]
     fn refuses_effects_unknown_plugins_and_other_track_kinds() {
+        crate::no_system_plugins();
         let mut e = Engine::default();
         let inst = track(&mut e, "instrument");
         let audio = track(&mut e, "audio");

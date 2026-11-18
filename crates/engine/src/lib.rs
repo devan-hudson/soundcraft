@@ -57,6 +57,13 @@ pub fn configure_plugin_scan(cache_file: Option<std::path::PathBuf>, probe_progr
     soundcraft_vst3_host::configure(cache_file, probe_program);
 }
 
+/// Tests that reach a VST3 scan call this first, so they never load the plugins installed on the
+/// machine running them (see `soundcraft_vst3_host::scan::use_standard_folders`).
+#[cfg(test)]
+pub(crate) fn no_system_plugins() {
+    soundcraft_vst3_host::scan::use_standard_folders(false);
+}
+
 /// A new [`soundcraft_model::AutoName::id`] for a scheme in `s`: a hash of a counter, never 0 and
 /// not held by another scheme in `s`. Native builds seed the hash from the system, so each run of
 /// the app gives other ids.

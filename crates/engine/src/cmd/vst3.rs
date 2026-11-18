@@ -35,6 +35,7 @@ mod tests {
 
     #[test]
     fn vst3_plugins_query_returns_a_list() {
+        crate::no_system_plugins();
         let mut e = Engine::default();
         let v = e.execute("engine.vst3_plugins", &json!({})).unwrap();
         assert!(v.is_array());
@@ -42,6 +43,7 @@ mod tests {
 
     #[test]
     fn unknown_vst3_insert_is_an_error() {
+        crate::no_system_plugins();
         let mut e = Engine::default();
         e.execute("track.new", &json!({})).unwrap();
         let t = e.session().tracks[0].id.0;
