@@ -385,6 +385,7 @@ mod tests {
 
     #[test]
     fn every_command_survives_empty_params() {
+        crate::no_system_plugins();
         // No command may panic with `{}` params on an empty or demo session.
         for demo in [false, true] {
             for c in command_specs() {
