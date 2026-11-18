@@ -187,6 +187,10 @@ fn app_icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result {
+    // A child started to probe one VST3 bundle for a plugin scan answers and exits right away.
+    if let Some(code) = soundcraft_engine::run_plugin_probe_if_requested() {
+        std::process::exit(code);
+    }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&soundcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
@@ -221,6 +225,16 @@ fn main() -> eframe::Result {
         }
     }
 
+    // VST3 scans probe each plugin in a child copy of this program and cache the results in the
+    // settings folder, so a plugin that hangs while loading costs one time-out, once.
+    let vst3_cache = env.config_dir.as_deref().filter(|_| env.prefs_enabled()).map(|d| d.join("vst3-scan-cache.json"));
+    let had_cache = vst3_cache.as_deref().is_some_and(std::path::Path::exists);
+    soundcraft_engine::configure_plugin_scan(vst3_cache, std::env::current_exe().ok());
+    if had_cache {
+        // A previous scan exists: refresh it now (only new or changed bundles load) so the
+        // plugin menus list VST3s without a click.
+        soundcraft_ui_egui::start_vst3_scan(false);
+    }
     let engine = if demo { soundcraft_engine::demo::demo_engine() } else { Engine::default() };
     let prefs = load_prefs(&env).unwrap_or_default();
     let mut options = eframe::NativeOptions {

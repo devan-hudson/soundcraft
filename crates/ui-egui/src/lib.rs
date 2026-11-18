@@ -47,6 +47,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::Receiver;
 
 pub use control::ControlRequest;
+
+/// Starts a VST3 scan (or rescan) on a background thread unless one runs; the plugin menus show
+/// its progress and list the plugins once it is done.
+pub fn start_vst3_scan(rescan: bool) -> bool {
+    soundcraft_vst3_host::scan_in_background(rescan)
+}
 pub use dialogs::ops_windows;
 use dialogs::recent;
 pub use dialogs::recovery;

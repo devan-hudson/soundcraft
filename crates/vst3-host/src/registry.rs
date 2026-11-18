@@ -3,7 +3,7 @@
 use crate::ffi::{Bundle, Instance, PARAM_BYPASS, PARAM_HIDDEN, PARAM_READ_ONLY, RawParam};
 use crate::plugin::Vst3Plugin;
 use crate::scan as paths;
-use crate::{AUDIO_MODULE_CLASS, Vst3Descriptor, Vst3Error, parse_id};
+use crate::{AUDIO_MODULE_CLASS, ProbeResult, ScanFailure, Vst3Descriptor, Vst3Error, parse_id};
 use soundcraft_dsp::{ParamInfo, Plugin, PluginInfo, Taper, Unit};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -21,6 +21,8 @@ struct Registry {
     infos: HashMap<String, &'static PluginInfo>,
     /// Ids that failed to instantiate (not retried every UI frame).
     failed: HashSet<String>,
+    /// Bundles the last scan could not load.
+    scan_failures: Vec<ScanFailure>,
 }
 
 fn registry() -> &'static Mutex<Registry> {
@@ -53,38 +55,67 @@ pub fn load_bundle(path: &Path) -> Result<Vec<Vst3Descriptor>, Vst3Error> {
         .collect())
 }
 
-/// Scans `dirs` (uncached). Unloadable files are logged and skipped; the first plugin with a
-/// given id wins.
+/// Scans `dirs` (not stored in the registry). Bundles are probed through [`crate::probe`]
+/// (out of process and cached when configured); unloadable ones are logged and skipped, and the
+/// first plugin with a given id wins.
 pub fn scan_paths(dirs: &[PathBuf]) -> Vec<Vst3Descriptor> {
+    scan_paths_report(dirs, false).0
+}
+
+fn scan_paths_report(dirs: &[PathBuf], retry_failed: bool) -> (Vec<Vst3Descriptor>, Vec<ScanFailure>) {
+    let bundles = paths::find_bundles(dirs);
+    let results = crate::probe::probe_all(&bundles, retry_failed);
     let mut out: Vec<Vst3Descriptor> = Vec::new();
-    for path in paths::find_bundles(dirs) {
-        match load_bundle(&path) {
-            Ok(ds) => {
+    let mut failures = Vec::new();
+    for (path, r) in bundles.into_iter().zip(results) {
+        match r {
+            ProbeResult::Ok(ds) => {
                 for d in ds {
                     if !out.iter().any(|o| o.id == d.id) {
                         out.push(d);
                     }
                 }
             }
-            Err(e) => log::warn!("{e}"),
+            ProbeResult::Err(reason) => failures.push(ScanFailure { path, reason }),
         }
     }
     out.sort_by_key(|d| d.name.to_lowercase());
-    out
+    (out, failures)
 }
 
-fn ensure_scanned(r: &mut Registry) -> &Vec<Vst3Descriptor> {
-    if r.scanned.is_none() {
-        let mut dirs = paths::default_search_paths();
-        dirs.extend(r.extra_dirs.iter().cloned());
-        r.scanned = Some(scan_paths(&dirs));
+/// Serializes whole scans, so two callers never probe the same folders at once. Never taken
+/// while holding the registry lock, and the registry lock is not held while a scan runs: the UI
+/// keeps reading [`cached`] during a long first scan.
+fn scan_lock() -> &'static Mutex<()> {
+    static L: OnceLock<Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(()))
+}
+
+fn search_dirs() -> Vec<PathBuf> {
+    let r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+    let mut dirs = paths::default_search_paths();
+    dirs.extend(r.extra_dirs.iter().cloned());
+    dirs
+}
+
+/// Scans unless a result is stored (or always, with `rescan`), stores it and returns it.
+fn run_scan(rescan: bool) -> Vec<Vst3Descriptor> {
+    let _g = scan_lock().lock().unwrap_or_else(PoisonError::into_inner);
+    if !rescan && let Some(list) = cached() {
+        return list;
     }
-    r.scanned.get_or_insert_with(Vec::new)
+    let (list, failures) = scan_paths_report(&search_dirs(), rescan);
+    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+    if rescan {
+        r.failed.clear();
+    }
+    r.scanned = Some(list.clone());
+    r.scan_failures = failures;
+    list
 }
 
 pub fn scan() -> Vec<Vst3Descriptor> {
-    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
-    ensure_scanned(&mut r).clone()
+    cached().unwrap_or_else(|| run_scan(false))
 }
 
 pub fn cached() -> Option<Vec<Vst3Descriptor>> {
@@ -92,19 +123,45 @@ pub fn cached() -> Option<Vec<Vst3Descriptor>> {
 }
 
 pub fn rescan() -> Vec<Vst3Descriptor> {
-    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
-    r.scanned = None;
-    r.failed.clear();
-    ensure_scanned(&mut r).clone()
+    run_scan(true)
+}
+
+pub fn last_scan_failures() -> Vec<ScanFailure> {
+    registry().lock().unwrap_or_else(PoisonError::into_inner).scan_failures.clone()
+}
+
+/// Starts [`scan`] (or [`rescan`]) on a thread of its own unless a scan is running.
+pub fn scan_in_background(rescan_all: bool) -> bool {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if crate::probe::progress().is_some() || STARTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return false;
+    }
+    let spawned = std::thread::Builder::new().name("vst3-scan".into()).spawn(move || {
+        if rescan_all {
+            rescan();
+        } else {
+            scan();
+        }
+        STARTED.store(false, std::sync::atomic::Ordering::Release);
+    });
+    if spawned.is_err() {
+        STARTED.store(false, std::sync::atomic::Ordering::Release);
+    }
+    spawned.is_ok()
 }
 
 pub fn add_search_dir(dir: &Path) -> usize {
-    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
-    if !r.extra_dirs.iter().any(|d| d == dir) {
-        r.extra_dirs.push(dir.to_path_buf());
+    {
+        let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+        if !r.extra_dirs.iter().any(|d| d == dir) {
+            r.extra_dirs.push(dir.to_path_buf());
+        }
     }
-    let found = scan_paths(&[dir.to_path_buf()]);
+    let _g = scan_lock().lock().unwrap_or_else(PoisonError::into_inner);
+    let (found, failures) = scan_paths_report(&[dir.to_path_buf()], false);
     let n = found.len();
+    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+    r.scan_failures.extend(failures);
     let list = r.scanned.get_or_insert_with(Vec::new);
     for d in found {
         if !list.iter().any(|o| o.id == d.id) {
@@ -200,13 +257,10 @@ fn build_info(d: &Vst3Descriptor, inst: &Instance) -> &'static PluginInfo {
 /// Finds the descriptor, loads its binary and creates an instance plus its (cached) info.
 fn instantiate_raw(id: &str) -> Result<(Instance, &'static PluginInfo), Vst3Error> {
     let cid = parse_id(id).ok_or_else(|| Vst3Error::NotFound(id.to_string()))?;
-    let desc = {
-        let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
-        if r.failed.contains(id) {
-            return Err(Vst3Error::Instantiate(id.to_string(), "failed before".into()));
-        }
-        ensure_scanned(&mut r).iter().find(|d| d.id == id).cloned().ok_or_else(|| Vst3Error::NotFound(id.to_string()))?
-    };
+    if registry().lock().unwrap_or_else(PoisonError::into_inner).failed.contains(id) {
+        return Err(Vst3Error::Instantiate(id.to_string(), "failed before".into()));
+    }
+    let desc = scan().into_iter().find(|d| d.id == id).ok_or_else(|| Vst3Error::NotFound(id.to_string()))?;
     let made = Bundle::load(&desc.path).and_then(|b| b.instantiate(&cid));
     let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
     match made {
