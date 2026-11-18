@@ -334,7 +334,7 @@ fn pitch_shifter_moves_pitch() {
 
 #[test]
 fn reverb_has_tail_and_decays() {
-    for id in ["room_reverb", "plate_reverb"] {
+    for id in ["room_reverb", "plate_reverb", "hall_reverb", "chamber_reverb"] {
         let mut p = prepared(id);
         p.set_param("mix", 100.0);
         p.set_param("decay", 1.0);
@@ -951,5 +951,120 @@ fn freq_shifter_parameter_changes_do_not_click() {
             let step = max_step(&across);
             assert!(step <= limit, "{id} {from} -> {to}, channel {c}: step {step}, limit {limit}");
         }
+    }
+}
+
+#[test]
+fn tremolo_modulates_level_at_its_rate() {
+    let mut p = prepared("tremolo");
+    p.set_param("rate", 4.0);
+    p.set_param("depth", 100.0);
+    let out = run(p.as_mut(), &[vec![0.5f32; 48_000], vec![0.5f32; 48_000]]);
+    let (lo, hi) = out[0][1000..].iter().fold((f32::MAX, 0.0f32), |(a, b), v| (a.min(*v), b.max(*v)));
+    assert!(lo < 0.02 && hi > 0.48, "full depth swings from silence to full level: {lo}..{hi}");
+    // Four cycles a second: the level crosses half-way going up about four times.
+    let ups = out[0].windows(2).filter(|w| w[0] < 0.25 && w[1] >= 0.25).count();
+    assert!((3..=5).contains(&ups), "{ups} cycles");
+    // Stereo phase puts the right channel half a cycle behind.
+    p.set_param("stereo", 100.0);
+    let out = run(p.as_mut(), &[vec![0.5f32; 12_000], vec![0.5f32; 12_000]]);
+    let apart = out[0].iter().zip(&out[1]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(apart > 0.4, "left and right move against each other: {apart}");
+}
+
+#[test]
+fn ping_pong_echoes_alternate_sides() {
+    let mut p = prepared("pingpong_delay");
+    p.set_param("time", 100.0);
+    p.set_param("mix", 100.0);
+    p.set_param("feedback", 50.0);
+    p.set_param("low_cut", 20.0);
+    p.set_param("high_cut", 20_000.0);
+    p.reset();
+    let mut x = vec![vec![0.0f32; 24_000]; 2];
+    x[0][0] = 1.0;
+    x[1][0] = 1.0;
+    let out = run(p.as_mut(), &x);
+    let at = |c: usize, n: usize| out[c][n - 40..n + 40].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(at(0, 4800) > 0.3 && at(1, 4800) < 0.05, "first echo on the left");
+    assert!(at(1, 9600) > 0.1 && at(0, 9600) < 0.05, "second echo on the right");
+    assert!(at(0, 14_400) > 0.05, "third back on the left");
+}
+
+#[test]
+fn ping_pong_and_tape_delay_follow_the_tempo_when_synced() {
+    for id in ["pingpong_delay", "tape_delay"] {
+        let mut p = prepared(id);
+        p.set_param("sync", 1.0);
+        p.set_param("division", 2.0); // 1/4
+        p.set_param("mix", 100.0);
+        p.set_param("feedback", 0.0);
+        p.set_transport(&soundcraft_dsp::Transport { tempo: 100.0, ..Default::default() });
+        p.reset();
+        let mut x = vec![vec![0.0f32; 48_000]; 2];
+        x[0][0] = 1.0;
+        x[1][0] = 1.0;
+        let out = run(p.as_mut(), &x);
+        let both: Vec<f32> = out[0].iter().zip(&out[1]).map(|(a, b)| a.abs() + b.abs()).collect();
+        let pos = both.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        // A quarter note at 100 BPM is 0.6 s; tape wow moves the head a few ms either way.
+        assert!((pos as i64 - 28_800).abs() < 300, "{id} echo at {pos}");
+    }
+}
+
+#[test]
+fn tape_delay_repeats_get_darker() {
+    let mut p = prepared("tape_delay");
+    p.set_param("time", 200.0);
+    p.set_param("mix", 100.0);
+    p.set_param("feedback", 80.0);
+    p.set_param("wow", 0.0);
+    p.set_param("flutter", 0.0);
+    p.reset();
+    // A burst of bright noise: later repeats keep less of its top end.
+    let mut x = vec![0.0f32; 48_000];
+    let mut seed = 1u32;
+    for v in x.iter_mut().take(2400) {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        *v = (seed >> 9) as f32 / (1u32 << 23) as f32 - 0.5;
+    }
+    let out = run(p.as_mut(), &[x]);
+    let brightness = |a: usize| {
+        let s = &out[0][a..a + 2400];
+        let diff: f32 = s.windows(2).map(|w| (w[1] - w[0]).abs()).sum();
+        diff / s.iter().map(|v| v.abs()).sum::<f32>().max(1e-9)
+    };
+    assert!(brightness(9600 * 2) < brightness(9600), "the second repeat is darker than the first");
+}
+
+#[test]
+fn convolution_reverb_is_aligned_reported_and_decays() {
+    let mut p = prepared("convolution_reverb");
+    let latency = p.latency();
+    assert!(latency > 0);
+    // Dry only: the dry path is delayed by exactly the reported latency.
+    p.set_param("mix", 0.0);
+    p.reset();
+    let mut x = vec![vec![0.0f32; 4800]; 2];
+    x[0][100] = 1.0;
+    let out = run(p.as_mut(), &x);
+    let pos = out[0].iter().position(|v| v.abs() > 0.5).unwrap();
+    assert_eq!(pos, 100 + latency, "dry path delayed by the latency");
+    // Wet: a tail that decays, different on the two sides.
+    for space in 0..6 {
+        let mut p = prepared("convolution_reverb");
+        p.set_param("space", space as f32);
+        p.set_param("mix", 100.0);
+        p.set_param("length", 60.0);
+        let mut x = vec![vec![0.0f32; 48_000 * 4]; 2];
+        x[0][0] = 1.0;
+        x[1][0] = 1.0;
+        let out = run(p.as_mut(), &x);
+        let early = rms(&out[0][latency..latency + 9600]);
+        let late = rms(&out[0][48_000 * 3..]);
+        assert!(early > 1e-3, "space {space}: no reverb");
+        assert!(late < early * 1e-2, "space {space}: not decaying {early} {late}");
+        assert!(out[0][latency..latency + 4800] != out[1][latency..latency + 4800], "space {space}: stereo");
+        assert!(p.tail_samples() > latency);
     }
 }

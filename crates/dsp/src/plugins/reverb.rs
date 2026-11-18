@@ -1,4 +1,4 @@
-//! Room Reverb and Plate Reverb: pre-delay → allpass input diffusion → 8-line feedback delay
+//! Room, Plate, Hall and Chamber Reverb: pre-delay → allpass input diffusion → 8-line feedback delay
 //! network (Hadamard mixing, per-line RT60 gains, in-loop HF damping, gentle delay modulation).
 
 use crate::biquad::{Biquad, FilterType};
@@ -29,6 +29,18 @@ const ROOM: Config = Config {
 const PLATE: Config =
     Config { delays_ms: [13.71, 17.93, 21.07, 24.73, 28.31, 32.89, 36.13, 40.31], diffusers_ms: [3.13, 4.27, 7.93, 11.29], mod_ms: 0.4, mod_hz: 1.1 };
 
+/// A large hall: long, widely spread lines, slow gentle modulation, dense diffusion.
+const HALL: Config = Config {
+    delays_ms: [37.13, 43.67, 50.29, 57.91, 66.07, 74.33, 83.89, 93.71],
+    diffusers_ms: [5.29, 7.91, 13.69, 19.13],
+    mod_ms: 0.5,
+    mod_hz: 0.37,
+};
+
+/// A chamber: a hard, bright, medium-sized room with very dense early build-up.
+const CHAMBER: Config =
+    Config { delays_ms: [17.29, 21.13, 24.91, 28.69, 33.31, 37.93, 42.11, 47.29], diffusers_ms: [3.71, 5.93, 9.11, 13.33], mod_ms: 0.2, mod_hz: 0.9 };
+
 macro_rules! reverb_params {
     ($mix:expr, $pre:expr, $decay:expr, $damp:expr, $diff:expr) => {
         [
@@ -46,6 +58,8 @@ macro_rules! reverb_params {
 
 static ROOM_PARAMS: [ParamInfo; 8] = reverb_params!(25.0, 10.0, 1.2, 6000.0, 70.0);
 static PLATE_PARAMS: [ParamInfo; 8] = reverb_params!(30.0, 20.0, 2.5, 10000.0, 85.0);
+static HALL_PARAMS: [ParamInfo; 8] = reverb_params!(25.0, 30.0, 3.2, 7000.0, 85.0);
+static CHAMBER_PARAMS: [ParamInfo; 8] = reverb_params!(25.0, 15.0, 1.6, 8500.0, 90.0);
 
 pub static ROOM_INFO: PluginInfo = PluginInfo {
     id: "room_reverb",
@@ -63,6 +77,26 @@ pub static PLATE_INFO: PluginInfo = PluginInfo {
     short_name: "Plate",
     category: Category::Reverb,
     params: &PLATE_PARAMS,
+    is_instrument: false,
+    audiosuite: true,
+};
+
+pub static HALL_INFO: PluginInfo = PluginInfo {
+    id: "hall_reverb",
+    name: "Hall Reverb",
+    short_name: "Hall",
+    category: Category::Reverb,
+    params: &HALL_PARAMS,
+    is_instrument: false,
+    audiosuite: true,
+};
+
+pub static CHAMBER_INFO: PluginInfo = PluginInfo {
+    id: "chamber_reverb",
+    name: "Chamber Reverb",
+    short_name: "Chamber",
+    category: Category::Reverb,
+    params: &CHAMBER_PARAMS,
     is_instrument: false,
     audiosuite: true,
 };
@@ -142,6 +176,14 @@ impl Reverb {
 
     pub fn plate() -> Self {
         Self::build(&PLATE_INFO, &PLATE)
+    }
+
+    pub fn hall() -> Self {
+        Self::build(&HALL_INFO, &HALL)
+    }
+
+    pub fn chamber() -> Self {
+        Self::build(&CHAMBER_INFO, &CHAMBER)
     }
 
     fn build(info: &'static PluginInfo, cfg: &'static Config) -> Self {

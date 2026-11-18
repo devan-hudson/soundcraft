@@ -10,6 +10,7 @@ pub mod modulation;
 pub mod pitch;
 pub mod reverb;
 pub mod sampler;
+pub mod space;
 pub mod strip;
 pub mod synth;
 pub mod utility;
@@ -27,11 +28,17 @@ pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &strip::STRIP_INFO,
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
+    &reverb::HALL_INFO,
+    &reverb::CHAMBER_INFO,
+    &space::CONV_INFO,
     &modulation::DELAY_INFO,
+    &space::PINGPONG_INFO,
+    &space::TAPE_DELAY_INFO,
     &auto_pan::AUTOPAN_INFO,
     &modulation::CHORUS_INFO,
     &modulation::FLANGER_INFO,
     &modulation::PHASER_INFO,
+    &space::TREMOLO_INFO,
     &modulation::RING_INFO,
     &freq_shifter::FREQ_SHIFTER_INFO,
     &harmonic::SAT_INFO,
@@ -63,6 +70,12 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "channel_strip" => Box::new(strip::ChannelStrip::new()),
         "room_reverb" => Box::new(reverb::Reverb::room()),
         "plate_reverb" => Box::new(reverb::Reverb::plate()),
+        "hall_reverb" => Box::new(reverb::Reverb::hall()),
+        "chamber_reverb" => Box::new(reverb::Reverb::chamber()),
+        "convolution_reverb" => Box::new(space::ConvolutionReverb::new()),
+        "pingpong_delay" => Box::new(space::PingPong::new()),
+        "tape_delay" => Box::new(space::TapeDelay::new()),
+        "tremolo" => Box::new(space::Tremolo::new()),
         "mod_delay" => Box::new(modulation::ModDelay::new()),
         "auto_pan" => Box::new(auto_pan::AutoPan::new()),
         "chorus" => Box::new(modulation::ModFx::chorus()),
