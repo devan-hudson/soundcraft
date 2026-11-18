@@ -157,6 +157,11 @@ cargo run --release -p soundcraft -- --demo     # opens the demo song
 
 Linux needs the ALSA headers (`libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora).
 
+Windows with an ASIO interface: install LLVM (`winget install LLVM.LLVM`), then run
+`.\scripts\build-windows-asio.ps1`. It builds with the opt-in `asio` feature, which downloads
+Steinberg's ASIO SDK (its own licence) during the build. Then pick **ASIO**, your interface's
+driver and a buffer size under **Setup › Playback Engine**.
+
 The web build:
 
 ```sh
