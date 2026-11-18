@@ -102,8 +102,22 @@ pub fn audio_systems() -> Vec<AudioSystem> {
             let host = cpal::host_from_id(id).ok()?;
             let def_out = host.default_output_device().as_ref().and_then(device_name);
             let def_in = host.default_input_device().as_ref().and_then(device_name);
-            let outputs = host.output_devices().map(|ds| ds.filter_map(|d| describe(&d, def_out.as_deref(), true)).collect()).unwrap_or_default();
-            let inputs = host.input_devices().map(|ds| ds.filter_map(|d| describe(&d, def_in.as_deref(), false)).collect()).unwrap_or_default();
+            let mut outputs: Vec<DeviceInfo> =
+                host.output_devices().map(|ds| ds.filter_map(|d| describe(&d, def_out.as_deref(), true)).collect()).unwrap_or_default();
+            let mut inputs: Vec<DeviceInfo> =
+                host.input_devices().map(|ds| ds.filter_map(|d| describe(&d, def_in.as_deref(), false)).collect()).unwrap_or_default();
+            if lists_only_when_idle(&host) {
+                // The device in use is missing from a list taken while its stream runs.
+                for d in remembered().lock().unwrap_or_else(std::sync::PoisonError::into_inner).of(id.name()) {
+                    for (list, output) in [(&mut outputs, true), (&mut inputs, false)] {
+                        if let Some(info) = describe(&d, None, output).filter(|i| i.max_channels > 0)
+                            && !list.iter().any(|x| x.name == info.name)
+                        {
+                            list.push(info);
+                        }
+                    }
+                }
+            }
             Some(AudioSystem { name: id.name().to_string(), is_default: id == default_id, outputs, inputs })
         })
         .collect()
@@ -162,17 +176,73 @@ pub(crate) fn host(cfg: &AudioConfig) -> cpal::Host {
         })
 }
 
+/// Devices found by name on systems that can list them only while no stream is open, keyed by
+/// (system, device name). ASIO loads one driver at a time: while the output stream holds the SSL
+/// driver, listing devices stops at the first other driver it cannot load, so the input device of
+/// that same interface (needed to record) could no longer be found. The device found when the
+/// output opened is the one to use, and it carries its channels and rates with it.
+struct Remembered<T> {
+    devices: Vec<(String, String, T)>,
+}
+
+impl<T: Clone> Remembered<T> {
+    const fn new() -> Self {
+        Remembered { devices: Vec::new() }
+    }
+
+    fn remember(&mut self, system: &str, name: &str, device: &T) {
+        self.devices.retain(|(s, n, _)| !(s == system && n == name));
+        self.devices.push((system.to_string(), name.to_string(), device.clone()));
+        // A handful of interfaces at most; keep the most recent few.
+        if self.devices.len() > 8 {
+            self.devices.remove(0);
+        }
+    }
+
+    /// The device of `system` named `name`, or with no name the one used last.
+    fn find(&self, system: &str, name: Option<&str>) -> Option<T> {
+        self.devices.iter().rev().find(|(s, n, _)| s == system && name.is_none_or(|w| w == n)).map(|(_, _, d)| d.clone())
+    }
+
+    fn of(&self, system: &str) -> Vec<T> {
+        self.devices.iter().filter(|(s, _, _)| s == system).map(|(_, _, d)| d.clone()).collect()
+    }
+}
+
+fn remembered() -> &'static std::sync::Mutex<Remembered<cpal::Device>> {
+    static R: std::sync::Mutex<Remembered<cpal::Device>> = std::sync::Mutex::new(Remembered::new());
+    &R
+}
+
+/// Systems whose device list goes blind while a stream is open (see [`Remembered`]).
+fn lists_only_when_idle(host: &cpal::Host) -> bool {
+    host.id().name().eq_ignore_ascii_case("ASIO")
+}
+
 /// The named output (or input) device of `host`, else its default device.
 pub(crate) fn device(host: &cpal::Host, name: Option<&str>, output: bool) -> Option<cpal::Device> {
+    let system = host.id().name();
+    let sticky = lists_only_when_idle(host);
     if let Some(want) = name {
         let found = if output { host.output_devices().ok() } else { host.input_devices().ok() }
             .and_then(|mut ds| ds.find(|d| device_name(d).as_deref() == Some(want)));
-        if found.is_some() {
+        if let Some(d) = &found {
+            if sticky {
+                remembered().lock().unwrap_or_else(std::sync::PoisonError::into_inner).remember(system, want, d);
+            }
             return found;
+        }
+        if sticky && let Some(d) = remembered().lock().unwrap_or_else(std::sync::PoisonError::into_inner).find(system, Some(want)) {
+            return Some(d);
         }
         log::warn!("audio device `{want}` is not available; using the default");
     }
-    if output { host.default_output_device() } else { host.default_input_device() }
+    let default = if output { host.default_output_device() } else { host.default_input_device() };
+    if default.is_none() && sticky {
+        // The default is the first driver that loads, and none can while one is in use: that one.
+        return remembered().lock().unwrap_or_else(std::sync::PoisonError::into_inner).find(system, None);
+    }
+    default
 }
 
 /// The buffer to request: the chosen size when the device's range allows it, else the default.
@@ -189,6 +259,24 @@ pub(crate) fn buffer_size(want: Option<u32>, supported: &cpal::SupportedBufferSi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remembered_device_is_found_by_system_and_name_or_as_the_last_used() {
+        let mut r: Remembered<String> = Remembered::new();
+        assert_eq!(r.find("ASIO", None), None);
+        r.remember("ASIO", "SSL ASIO Driver 1", &"ssl".to_string());
+        r.remember("ASIO", "Focusrite USB ASIO", &"focusrite".to_string());
+        assert_eq!(r.find("ASIO", Some("SSL ASIO Driver 1")).as_deref(), Some("ssl"));
+        assert_eq!(r.find("ASIO", None).as_deref(), Some("focusrite"), "no name: the one used last");
+        assert_eq!(r.find("WASAPI", Some("SSL ASIO Driver 1")), None, "per system");
+        r.remember("ASIO", "SSL ASIO Driver 1", &"ssl again".to_string());
+        assert_eq!(r.of("ASIO").len(), 2, "one entry per device");
+        assert_eq!(r.find("ASIO", None).as_deref(), Some("ssl again"));
+        for i in 0..20 {
+            r.remember("ASIO", &format!("d{i}"), &i.to_string());
+        }
+        assert_eq!(r.of("ASIO").len(), 8, "bounded");
+    }
 
     #[test]
     fn config_round_trips_and_tolerates_missing_fields() {
