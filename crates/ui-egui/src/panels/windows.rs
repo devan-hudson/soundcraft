@@ -454,16 +454,93 @@ pub fn recall_configuration(app: &mut SoundApp, saved: &Value) -> Result<(), Str
     Ok(())
 }
 
-/// The audio systems as last enumerated (enumerating probes devices: done when the window opens
-/// and on Refresh, not every frame).
-fn audio_systems(ctx: &egui::Context, refresh: bool) -> Arc<Vec<AudioSystem>> {
-    let id = egui::Id::unique("audio_systems");
-    if !refresh && let Some(s) = ctx.data(|d| d.get_temp::<Arc<Vec<AudioSystem>>>(id)) {
-        return s;
+/// The audio systems found by the last device scan, and whether a scan is running now.
+#[derive(Default)]
+struct DeviceScan {
+    found: Option<Arc<Vec<AudioSystem>>>,
+    running: bool,
+}
+
+fn device_scan() -> &'static std::sync::Mutex<DeviceScan> {
+    static S: std::sync::OnceLock<std::sync::Mutex<DeviceScan>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// The audio systems as last enumerated, and whether a new enumeration is running. Enumerating
+/// probes every device, and with ASIO that loads each installed driver in turn: on a machine with
+/// 18 ASIO drivers it took about 8 seconds. Done on the UI thread, that froze the whole window
+/// each time Playback Engine opened, so it runs on a thread of its own (started when the window
+/// opens and on Refresh) and the window shows the last list, or a spinner, meanwhile.
+fn audio_systems(ctx: &egui::Context, refresh: bool) -> (Option<Arc<Vec<AudioSystem>>>, bool) {
+    audio_systems_with(device_scan(), soundcraft_playback::devices::audio_systems, ctx, refresh)
+}
+
+/// [`audio_systems`] with the scan state and the enumeration passed in (testable).
+fn audio_systems_with(
+    state: &'static std::sync::Mutex<DeviceScan>,
+    enumerate: fn() -> Vec<AudioSystem>,
+    ctx: &egui::Context,
+    refresh: bool,
+) -> (Option<Arc<Vec<AudioSystem>>>, bool) {
+    let mut scan = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if (refresh || scan.found.is_none()) && !scan.running {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // No threads in the browser; its audio system lists only the default devices, quickly.
+            scan.found = Some(Arc::new(enumerate()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let repaint = ctx.clone();
+            let spawned = std::thread::Builder::new().name("audio-devices".into()).spawn(move || {
+                let found = Arc::new(enumerate());
+                let mut scan = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                scan.found = Some(found);
+                scan.running = false;
+                repaint.request_repaint();
+            });
+            scan.running = spawned.is_ok();
+            if spawned.is_err() {
+                scan.found = Some(Arc::new(enumerate()));
+            }
+        }
     }
-    let s = Arc::new(soundcraft_playback::devices::audio_systems());
-    ctx.data_mut(|d| d.insert_temp(id, Arc::clone(&s)));
-    s
+    #[cfg(target_arch = "wasm32")]
+    let _ = ctx;
+    (scan.found.clone(), scan.running)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod device_scan_tests {
+    use super::*;
+
+    fn slow() -> Vec<AudioSystem> {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        vec![AudioSystem { name: "Slow".into(), is_default: true, outputs: Vec::new(), inputs: Vec::new() }]
+    }
+
+    #[test]
+    fn a_slow_device_scan_does_not_hold_up_the_window() {
+        let state: &'static std::sync::Mutex<DeviceScan> = Box::leak(Box::default());
+        let ctx = egui::Context::default();
+        let started = std::time::Instant::now();
+        let (found, running) = audio_systems_with(state, slow, &ctx, true);
+        assert!(started.elapsed() < std::time::Duration::from_millis(300), "returned before the scan finished");
+        assert!(found.is_none() && running);
+        // Asking again while it runs starts no second scan and still answers at once.
+        let (_, running) = audio_systems_with(state, slow, &ctx, true);
+        assert!(running);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let found = loop {
+            let (found, running) = audio_systems_with(state, slow, &ctx, false);
+            if !running && found.is_some() {
+                break found;
+            }
+            assert!(std::time::Instant::now() < deadline, "the scan finished");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(found.map(|f| f.len()), Some(1));
+    }
 }
 
 /// The system a config means (its own, else the default one) in an enumeration.
@@ -516,9 +593,14 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
     }
     let draft_id = egui::Id::unique("audio_draft");
     let mut draft = ctx.data(|d| d.get_temp::<AudioConfig>(draft_id)).unwrap_or_else(|| app.ui.audio.clone());
+    // Each time the window opens, look for devices again (plugged in or out since) in the
+    // background, showing the last list until the new one is in.
+    let opened_id = egui::Id::unique("audio_window_open");
+    let just_opened = !ctx.data(|d| d.get_temp::<bool>(opened_id).unwrap_or(false));
     let mut refresh = false;
     let mut apply = false;
-    let systems = audio_systems(ctx, false);
+    let (found, scanning) = audio_systems(ctx, just_opened);
+    let systems = found.unwrap_or_default();
     win(ctx, &mut open, "Playback Engine", vec2(460.0, 360.0), |ui| {
         let t = Tokens::current();
         egui::Grid::new("pe").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
@@ -559,7 +641,10 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.button(crate::localization::text("Refresh devices")).clicked() {
+            if scanning {
+                ui.spinner();
+                ui.label(egui::RichText::new(crate::localization::text("Looking for audio devices…")).color(t.text_dim));
+            } else if ui.button(crate::localization::text("Refresh devices")).clicked() {
                 refresh = true;
             }
             let changed = draft != app.ui.audio;
@@ -623,12 +708,15 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
         app.ui.status = e;
     }
     if open {
-        ctx.data_mut(|d| d.insert_temp(draft_id, draft));
+        ctx.data_mut(|d| {
+            d.insert_temp(draft_id, draft);
+            d.insert_temp(opened_id, true);
+        });
     } else {
-        // Closing discards unapplied edits and the device list (re-read on the next open).
+        // Closing discards unapplied edits; the device list is looked for again on the next open.
         ctx.data_mut(|d| {
             d.remove_temp::<AudioConfig>(draft_id);
-            d.remove_temp::<Arc<Vec<AudioSystem>>>(egui::Id::unique("audio_systems"));
+            d.remove_temp::<bool>(opened_id);
         });
     }
     app.ui.show_playback_engine = open;
