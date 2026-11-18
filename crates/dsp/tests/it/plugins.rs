@@ -1068,3 +1068,82 @@ fn convolution_reverb_is_aligned_reported_and_decays() {
         assert!(p.tail_samples() > latency);
     }
 }
+
+#[test]
+fn fet_compressor_squashes_harder_in_all_mode() {
+    let gr_for = |ratio: f32| {
+        let mut p = prepared("fet_compressor");
+        p.set_param("input", 30.0);
+        p.set_param("ratio", ratio);
+        let x = vec![sine(200.0, 0.5, 24_000), sine(200.0, 0.5, 24_000)];
+        let out = run(p.as_mut(), &x);
+        assert!(out.iter().flatten().all(|v| v.is_finite()));
+        p.gain_reduction_db()
+    };
+    let (gentle, all) = (gr_for(0.0), gr_for(4.0));
+    assert!(gentle > 3.0, "4:1 compresses a hot signal: {gentle} dB");
+    assert!(all > gentle, "All mode compresses harder: {all} vs {gentle}");
+}
+
+#[test]
+fn opto_compressor_releases_slower_after_long_compression() {
+    // Time for the gain reduction to fall from its peak to 1 dB after a loud passage of `secs`.
+    let recovery = |secs: usize| {
+        let mut p = prepared("opto_compressor");
+        p.set_param("peak_reduction", 80.0);
+        let loud = vec![sine(300.0, 0.8, 48_000 * secs); 2];
+        let _ = run(p.as_mut(), &loud);
+        let peak = p.gain_reduction_db();
+        assert!(peak > 3.0, "it compresses: {peak} dB");
+        let mut blocks = 0;
+        let quiet = vec![vec![0.0f32; BLOCK]; 2];
+        while p.gain_reduction_db() > 1.0 && blocks < 2000 {
+            let _ = run(p.as_mut(), &quiet);
+            blocks += 1;
+        }
+        blocks
+    };
+    let (short, long) = (recovery(1), recovery(6));
+    assert!(long > short, "it remembers heavy compression: {long} blocks vs {short}");
+}
+
+#[test]
+fn pitch_correct_pulls_a_flat_note_into_tune() {
+    // A4 sung 35 cents flat (430 Hz) comes out near 440 Hz.
+    let mut p = prepared("pitch_correct");
+    p.set_param("speed", 0.0);
+    let x = vec![sine(430.0, 0.5, 48_000 * 2), sine(430.0, 0.5, 48_000 * 2)];
+    let out = run(p.as_mut(), &x);
+    let tail = &out[0][48_000..];
+    let ups = tail.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f32;
+    let hz = ups / (tail.len() as f32 / SR);
+    assert!((hz - 440.0).abs() < 4.0, "corrected to {hz} Hz");
+    // Amount 0 leaves it alone.
+    let mut p = prepared("pitch_correct");
+    p.set_param("amount", 0.0);
+    let out = run(p.as_mut(), &x);
+    let tail = &out[0][48_000..];
+    let ups = tail.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f32;
+    let hz = ups / (tail.len() as f32 / SR);
+    assert!((hz - 430.0).abs() < 4.0, "untouched at {hz} Hz");
+    assert!(p.latency() > 0);
+}
+
+#[test]
+fn de_esser_wideband_turns_the_whole_signal_down() {
+    // Low tone plus loud sibilance: split mode keeps the low tone, wideband dips it too.
+    let low_after = |mode: f32| {
+        let mut p = prepared("de_esser");
+        p.set_param("mode", mode);
+        p.set_param("threshold", -40.0);
+        p.set_param("range", 20.0);
+        let x: Vec<f32> = sine(200.0, 0.3, 24_000).iter().zip(sine(8000.0, 0.5, 24_000)).map(|(a, b)| a + b).collect();
+        let out = run(p.as_mut(), &[x]);
+        // Measure the 200 Hz part by averaging away the 8 kHz with a short moving mean.
+        let tail = &out[0][12_000..];
+        let smooth: Vec<f32> = tail.windows(6).map(|w| w.iter().sum::<f32>() / 6.0).collect();
+        rms(&smooth)
+    };
+    let (split, wide) = (low_after(0.0), low_after(1.0));
+    assert!(wide < split * 0.5, "wideband dips the low tone ({wide}) where split keeps it ({split})");
+}

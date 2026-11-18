@@ -4,7 +4,7 @@
 //! not wander. Gain computers work in the log domain with smoothed gain reduction.
 
 use crate::biquad::{Biquad, Coeffs, FilterType};
-use crate::params::{Params, lin, log, param_plumbing, toggle};
+use crate::params::{Params, choice, lin, log, param_plumbing, toggle};
 use crate::util::{DelayLine, Smoother, frames_in, ms_to_samples, sane_channels, sane_sr, time_coef};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain, gain_to_db};
 
@@ -332,11 +332,16 @@ impl Plugin for ExpanderGate {
 
 // ---------------------------------------------------------------------------------------------
 
-static DEESS_PARAMS: [ParamInfo; 4] = [
+static DEESS_PARAMS: [ParamInfo; 7] = [
     log("freq", "Freq", 2000.0, 16000.0, 6000.0, Unit::Hz),
     lin("range", "Range", 0.0, 40.0, 10.0, Unit::Db),
     lin("threshold", "Threshold", -60.0, 0.0, -30.0, Unit::Db),
     toggle("listen", "Listen", false),
+    // Split turns down only the highs above Freq; Wideband turns the whole signal down.
+    choice("mode", "Mode", &["Split", "Wideband"], 0),
+    // High-pass hears everything above Freq; Band-pass only a band around it.
+    choice("detect", "Detect", &["High-pass", "Band-pass"], 0),
+    log("release", "Release", 10.0, 500.0, 60.0, Unit::Ms),
 ];
 
 pub static DEESS_INFO: PluginInfo = PluginInfo {
@@ -389,11 +394,12 @@ impl DeEsser {
 
     fn update(&mut self) {
         self.att = time_coef(0.5, self.sr);
-        self.rel = time_coef(60.0, self.sr);
+        self.rel = time_coef(self.p.v(6), self.sr);
         let f = self.p.v(0);
         let sr = self.sr;
+        let (kind, q) = if self.p.choice(5) == 1 { (FilterType::BandPass, 1.4) } else { (FilterType::HighPass, std::f32::consts::FRAC_1_SQRT_2) };
         for b in &mut self.hp {
-            b.set(FilterType::HighPass, f, std::f32::consts::FRAC_1_SQRT_2, 0.0, sr);
+            b.set(kind, f, q, 0.0, sr);
         }
         self.set_shelf(self.shelf_gr);
     }
@@ -458,9 +464,19 @@ impl Plugin for DeEsser {
                 self.set_shelf(gr);
             }
             if !listen {
-                for (b, f) in io.iter_mut().zip(self.shelf.iter_mut()).take(ch) {
-                    if let Some(seg) = b.get_mut(n..n + len) {
-                        f.process_block(seg);
+                if self.p.choice(4) == 1 {
+                    // Wideband: the whole signal dips while the sibilance lasts.
+                    let g = db_to_gain(-gr);
+                    for b in io.iter_mut().take(ch) {
+                        if let Some(seg) = b.get_mut(n..n + len) {
+                            seg.iter_mut().for_each(|x| *x *= g);
+                        }
+                    }
+                } else {
+                    for (b, f) in io.iter_mut().zip(self.shelf.iter_mut()).take(ch) {
+                        if let Some(seg) = b.get_mut(n..n + len) {
+                            f.process_block(seg);
+                        }
                     }
                 }
             }

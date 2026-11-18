@@ -14,6 +14,7 @@ pub mod space;
 pub mod strip;
 pub mod synth;
 pub mod utility;
+pub mod vocal;
 
 use crate::{Plugin, PluginInfo};
 
@@ -24,6 +25,8 @@ pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &dynamics::COMP_INFO,
     &dynamics::GATE_INFO,
     &dynamics::DEESS_INFO,
+    &vocal::FET_INFO,
+    &vocal::OPTO_INFO,
     &dynamics::MAX_INFO,
     &strip::STRIP_INFO,
     &reverb::ROOM_INFO,
@@ -46,6 +49,7 @@ pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &harmonic::RECT_INFO,
     &harmonic::SUB_INFO,
     &pitch::PITCH_INFO,
+    &vocal::TUNE_INFO,
     &utility::SHIFT_INFO,
     &utility::GAIN_INFO,
     &utility::TRIM_INFO,
@@ -66,6 +70,9 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "compressor" => Box::new(dynamics::Compressor::new()),
         "expander_gate" => Box::new(dynamics::ExpanderGate::new()),
         "de_esser" => Box::new(dynamics::DeEsser::new()),
+        "fet_compressor" => Box::new(vocal::FetCompressor::new()),
+        "opto_compressor" => Box::new(vocal::OptoCompressor::new()),
+        "pitch_correct" => Box::new(vocal::PitchCorrect::new()),
         "maximizer" => Box::new(dynamics::Maximizer::new()),
         "channel_strip" => Box::new(strip::ChannelStrip::new()),
         "room_reverb" => Box::new(reverb::Reverb::room()),
