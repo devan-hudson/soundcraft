@@ -10,12 +10,15 @@
 #
 # Needs: Rust (rustup), the Visual Studio C++ build tools and LLVM (`winget install LLVM.LLVM`).
 param([switch]$Run)
-$ErrorActionPreference = 'Stop'
+# No `$ErrorActionPreference = 'Stop'`: Windows PowerShell 5.1 turns a native command's stderr into
+# error records when output is redirected, and cargo writes its progress there, so that setting
+# would abort the build at its first line. Failures are checked through $LASTEXITCODE instead.
 
 $candidates = @($env:LIBCLANG_PATH, 'C:\Program Files\LLVM\bin') |
     Where-Object { $_ -and (Test-Path (Join-Path $_ 'libclang.dll')) }
 if (-not $candidates) {
-    Write-Error "libclang.dll not found. Install LLVM (winget install LLVM.LLVM) or set LIBCLANG_PATH to its bin folder."
+    Write-Host "libclang.dll not found. Install LLVM (winget install LLVM.LLVM) or set LIBCLANG_PATH to its bin folder."
+    exit 1
 }
 $env:LIBCLANG_PATH = @($candidates)[0]
 Write-Host "Using libclang from $env:LIBCLANG_PATH"
