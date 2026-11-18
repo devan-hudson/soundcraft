@@ -204,6 +204,7 @@ pub(super) fn translate(source: &str) -> Option<&'static str> {
         "Recover Unsaved Work" => "Recuperar trabalho não salvo",
         "Reduce motion" => "Reduzir animações",
         "Refresh devices" => "Atualizar dispositivos",
+        "Looking for audio devices…" => "Procurando dispositivos de áudio…",
         "Refresh Report" => "Atualizar relatório",
         "Remove from Folder" => "Remover da pasta",
         "Remove send" => "Remover envio",
