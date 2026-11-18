@@ -37,6 +37,8 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 
 const BLOCK: usize = 512;
+/// Most device output channels opened (an interface with more is opened this wide).
+const MAX_DEVICE_OUTPUTS: usize = 64;
 
 /// Room for replaced snapshots on their way back; `update_session` empties it before each send.
 const OLD_SESSIONS: usize = 16;
@@ -216,7 +218,10 @@ impl Player {
             meters: Mutex::new(MeterSnapshot::default()),
         });
         let want = session.sample_rate.hz();
-        let want_ch = u16::try_from(main_channels(&session)).unwrap_or(2);
+        // Every output channel the device has (up to MAX_DEVICE_OUTPUTS), not just the main mix's:
+        // tracks routed to other output paths (Out 3-4, Out 5-6, …) play on the channels after
+        // the main pair, and a path added later needs no reopen. Unused channels stay silent.
+        let want_ch = u16::try_from(main_channels(&session).max(MAX_DEVICE_OUTPUTS)).unwrap_or(2);
         let side_rate = session.sample_rate.as_f64() as f32;
         let new_side = |garbage: Receiver<Vec<Box<dyn Plugin>>>| {
             let mut side = Side::new(side_rate, garbage);

@@ -101,9 +101,25 @@ pub const MAIN_CHANNELS: usize = 2;
 /// Widest strip, bus or main mix (9.1.6 / 3rd-order Ambisonics). Wider formats are truncated.
 pub const MAX_CHANNELS: usize = 16;
 
+/// Most hardware output paths mixed besides the main one (a session file could list any number).
+pub const MAX_HARDWARE_OUTPUTS: usize = 64;
+
 /// Number of channels of a session's main mix.
 pub fn main_channels(s: &Session) -> usize {
     s.main_format().channels().clamp(MAIN_CHANNELS, MAX_CHANNELS)
+}
+
+/// A hardware output path other than the main one (`Session::outputs` after the first): tracks
+/// routed to it (`Route::Hardware(name)`) are mixed here instead of into the main mix, and the
+/// playback host writes it to the device channels from `first_channel` on.
+#[derive(Debug, Clone)]
+pub struct HardwareOut {
+    pub name: String,
+    /// First device channel (0-based).
+    pub first_channel: usize,
+    pub format: ChannelFormat,
+    /// The last rendered block, one buffer per channel.
+    pub buf: Vec<Vec<f32>>,
 }
 
 /// Renders sessions. Keep one per playback stream; plugin state persists across blocks.
@@ -114,6 +130,10 @@ pub struct MixEngine {
     busses: HashMap<BusId, BusBuf>,
     main: Vec<Vec<f32>>,
     main_fmt: ChannelFormat,
+    /// Name of the main output path (`Route::Hardware` naming it means the main mix).
+    main_name: String,
+    /// The other output paths, as of the last sync.
+    hardware: Vec<HardwareOut>,
     pub meters: HashMap<TrackId, StripMeter>,
     pub main_meter: StripMeter,
     pub pan_law: PanLaw,
@@ -165,6 +185,8 @@ impl MixEngine {
             busses: HashMap::new(),
             main: vec![vec![0.0; max_block]; MAIN_CHANNELS],
             main_fmt: ChannelFormat::Stereo,
+            main_name: String::new(),
+            hardware: Vec::new(),
             meters: HashMap::new(),
             main_meter: StripMeter::default(),
             pan_law: PanLaw::Minus3,
@@ -244,6 +266,11 @@ impl MixEngine {
         self.main.len()
     }
 
+    /// The hardware output paths besides the main one, holding the last rendered block.
+    pub fn hardware_outputs(&self) -> &[HardwareOut] {
+        &self.hardware
+    }
+
     /// Reset all plugin state (on stop / seek).
     pub fn reset(&mut self) {
         for s in self.strips.values_mut() {
@@ -280,6 +307,7 @@ impl MixEngine {
         if self.main.len() != main_ch {
             self.main = vec![vec![0.0; mb]; main_ch];
         }
+        self.sync_hardware(s);
         let mut cx =
             SlotCtx { sr: self.sample_rate, mb, external: self.external, offline: self.offline, adopt: &mut self.adopt, retired: &mut self.retired };
         let gone: Vec<TrackId> = self.strips.keys().filter(|id| s.track(**id).is_none()).copied().collect();
@@ -348,6 +376,35 @@ impl MixEngine {
             }
         }
         self.busses.retain(|id, _| s.bus(*id).is_some());
+    }
+
+    /// Buffers for every output path after the main one (allocates only when they change).
+    fn sync_hardware(&mut self, s: &Session) {
+        let mb = self.max_block;
+        let main_name = s.outputs.first().map_or("", |o| o.name.as_str());
+        if self.main_name != main_name {
+            self.main_name = main_name.to_string();
+        }
+        let same = self.hardware.len() == s.outputs.len().saturating_sub(1)
+            && self
+                .hardware
+                .iter()
+                .zip(s.outputs.iter().skip(1))
+                .all(|(h, o)| h.name == o.name && h.first_channel == usize::from(o.first_channel) && h.format == o.format);
+        if !same {
+            self.hardware = s
+                .outputs
+                .iter()
+                .skip(1)
+                .take(MAX_HARDWARE_OUTPUTS)
+                .map(|o| HardwareOut {
+                    name: o.name.clone(),
+                    first_channel: usize::from(o.first_channel),
+                    format: o.format,
+                    buf: vec![vec![0.0; mb]; o.format.channels().clamp(1, MAX_CHANNELS)],
+                })
+                .collect();
+        }
     }
 
     /// Re-syncs plugin instances and the routing order when the session's structure changed
@@ -423,6 +480,11 @@ impl MixEngine {
         for c in &mut self.main {
             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
         }
+        for h in &mut self.hardware {
+            for c in &mut h.buf {
+                c.iter_mut().take(frames).for_each(|x| *x = 0.0);
+            }
+        }
     }
 
     /// Delay compensation for the independent strips (`work`), then route them back into the engine.
@@ -475,7 +537,7 @@ impl MixEngine {
                 st.align_pre.process(&mut st.pre, frames);
             }
             let waits = match &t.mixer.output {
-                Route::Main => true,
+                Route::Main | Route::Hardware(_) => true,
                 Route::Bus(b) => self.aux_fed.contains(b),
                 _ => false,
             };
@@ -623,7 +685,7 @@ impl MixEngine {
             apply_matrix(src, frames, &mut dst.buf, &m, gain);
         }
         let src: &[Vec<f32>] = match &t.mixer.output {
-            Route::Main | Route::Bus(_) if strip.out_extra.len > 0 => {
+            Route::Main | Route::Bus(_) | Route::Hardware(_) if strip.out_extra.len > 0 => {
                 if strip.outbuf.len() != strip.buf.len() {
                     strip.outbuf = vec![Vec::new(); strip.buf.len()];
                 }
@@ -638,11 +700,16 @@ impl MixEngine {
         };
         let (dst, dst_fmt) = match &t.mixer.output {
             Route::Main => (&mut self.main, self.main_fmt),
+            Route::Hardware(name) if name.eq_ignore_ascii_case(&self.main_name) => (&mut self.main, self.main_fmt),
+            Route::Hardware(name) => match self.hardware.iter_mut().find(|h| h.name.eq_ignore_ascii_case(name)) {
+                Some(h) => (&mut h.buf, h.format),
+                None => return,
+            },
             Route::Bus(b) => match self.busses.get_mut(b) {
                 Some(d) => (&mut d.buf, d.fmt),
                 None => return,
             },
-            _ => return,
+            Route::None => return,
         };
         let mut start = 0;
         while start < frames {
