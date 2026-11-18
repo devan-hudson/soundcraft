@@ -358,6 +358,8 @@ mod tests {
 
     #[test]
     fn garbage_files_are_errors_not_crashes() {
+        // `create` with a well-formed id scans: not the plugins installed on this machine.
+        scan::use_standard_folders(false);
         let d = std::env::temp_dir().join(format!("soundcraft-vst3-garbage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let arch = if cfg!(target_os = "macos") {
