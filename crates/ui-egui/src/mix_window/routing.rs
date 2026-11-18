@@ -19,6 +19,23 @@ pub(crate) fn input_name(app: &SoundApp, track: &Track) -> String {
     }
 }
 
+/// The output paths after the main one: the session's own, then every further stereo pair of
+/// the open audio device ("Out 3-4" … "Out 15-16" on a 16-channel interface). Picking a pair the
+/// session lacks adds it as an output path (`track.output` does that).
+fn hardware_outputs(app: &SoundApp) -> Vec<(String, String)> {
+    let s = app.engine.session();
+    let mut out: Vec<(String, String)> = s.outputs.iter().skip(1).map(|o| (o.name.clone(), o.name.clone())).collect();
+    let device = app.player.as_ref().filter(|p| !p.silent).map_or(0, |p| usize::from(p.device_channels));
+    for first in (2..device.saturating_sub(1)).step_by(2) {
+        let taken = s.outputs.iter().any(|o| usize::from(o.first_channel) == first && o.format.channels() == 2);
+        if !taken {
+            let name = format!("Out {}-{}", first + 1, first + 2);
+            out.push((name.clone(), name));
+        }
+    }
+    out
+}
+
 /// The input or output menu under `resp`. It closes only on a click outside, so its bus search
 /// field can be typed in.
 pub(crate) fn route_popup(app: &mut SoundApp, resp: &egui::Response, id: TrackId, input: bool) {
@@ -40,6 +57,9 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         fixed.extend((1..=8).map(|i| (crate::localized_format!("In {}", i), format!("In {i}"))));
     } else {
         fixed.push((main_name, "main".to_string()));
+        for (label, value) in hardware_outputs(app) {
+            fixed.push((label, value));
+        }
     }
     if search.typing() {
         let visible: Vec<(&String, &String)> =

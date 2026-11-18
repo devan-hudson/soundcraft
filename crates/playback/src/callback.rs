@@ -313,6 +313,17 @@ impl AudioState {
                 a * (1.0 - fr) + b * fr
             };
             write_frame(frame, channels, nch, sounding, &self.fold, sample);
+            if sounding {
+                // Other output paths go to their own device channels (summed onto anything there).
+                for h in self.mix.hardware_outputs() {
+                    for (c, buf) in h.buf.iter().enumerate() {
+                        let Some(o) = frame.get_mut(h.first_channel.saturating_add(c)) else { break };
+                        let a = buf.get(i0).copied().unwrap_or(0.0);
+                        let b = if i0 + 1 < self.pending_len { buf.get(i0 + 1).copied().unwrap_or(a) } else { a };
+                        *o = out_sample(*o + a * (1.0 - fr) + b * fr);
+                    }
+                }
+            }
             self.read += step;
         }
     }
