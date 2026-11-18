@@ -33,9 +33,24 @@ impl Os {
     }
 }
 
+static STANDARD_FOLDERS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether scans look in this OS's standard VST3 folders (on by default). Tests turn it off: on a
+/// machine with plugins installed, a test that scans would otherwise load every one of them, and
+/// one plugin that hangs while loading (as some do outside the hosts they know) hangs the test.
+/// `VST3_PATH` and folders added with `add_search_dir` are still scanned.
+pub fn use_standard_folders(on: bool) {
+    STANDARD_FOLDERS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The standard VST3 search locations for this OS (existing or not), followed by every entry of
 /// the `VST3_PATH` environment variable.
 pub fn default_search_paths() -> Vec<PathBuf> {
+    if !STANDARD_FOLDERS.load(std::sync::atomic::Ordering::Relaxed) {
+        return std::env::var_os("VST3_PATH")
+            .map(|cp| std::env::split_paths(&cp).filter(|p| !p.as_os_str().is_empty()).collect())
+            .unwrap_or_default();
+    }
     default_search_paths_with(Os::current(), |name| std::env::var_os(name), std::env::current_exe().ok())
 }
 
