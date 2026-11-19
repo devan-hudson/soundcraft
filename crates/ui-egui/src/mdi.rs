@@ -16,6 +16,8 @@ const MIN_BAR_W: f32 = 190.0;
 const MIN_SIZE: egui::Vec2 = egui::vec2(360.0, 220.0);
 /// The width of the edges that resize a restored window.
 const GRIP: f32 = 6.0;
+/// The solid frame round a restored window.
+const FRAME: f32 = 4.0;
 
 /// One window's state; `rect` is its restored placement relative to the main window's area
 /// ([x, y, width, height]).
@@ -281,7 +283,8 @@ fn window(app: &mut SoundApp, ctx: &egui::Context, desk: Rect, w: MainWindow) {
     egui::Area::new(lay.id).order(Order::Background).fixed_pos(rect.min).constrain(false).interactable(true).show(ctx, |ui| {
         ui.set_min_size(rect.size());
         ui.set_max_size(rect.size());
-        ui.set_clip_rect(rect.intersect(desk));
+        // Room around the window for its shadow.
+        ui.set_clip_rect(rect.expand(12.0).intersect(desk));
         let front = app.ui.window == w;
         // A press anywhere in this window, where it is the top layer, brings it forward.
         if ui.input(|i| i.pointer.any_pressed())
@@ -296,19 +299,34 @@ fn window(app: &mut SoundApp, ctx: &egui::Context, desk: Rect, w: MainWindow) {
         let content = if c.maximized {
             rect
         } else {
-            // Frame, shadow and title bar.
+            // Shadow, then a solid frame round the window so it stands apart from what is behind.
             let p = ui.painter();
-            p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Outside);
-            p.rect_filled(rect, 0.0, t.panel_bg);
-            let bar = Rect::from_min_size(rect.min, vec2(rect.width(), TITLE_H));
-            let fill = if front { t.menu_bar.lerp_to_gamma(t.accent, 0.18) } else { t.menu_bar };
+            for k in 1..=6u8 {
+                let e = f32::from(k) * 1.5;
+                p.rect_filled(rect.expand(e).translate(vec2(0.0, 2.0)), CornerRadius::same(3), Color32::from_black_alpha(34u8.saturating_sub(k * 5)));
+            }
+            let edge = if front { t.accent.lerp_to_gamma(Color32::from_gray(150), 0.35) } else { Color32::from_gray(96) };
+            p.rect_filled(rect, CornerRadius::same(3), edge);
+            p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, Color32::from_black_alpha(230)), StrokeKind::Outside);
+            p.rect_stroke(
+                rect.shrink(1.0),
+                CornerRadius::same(2),
+                Stroke::new(1.0, Color32::from_white_alpha(if front { 70 } else { 36 })),
+                StrokeKind::Inside,
+            );
+            let inner = rect.shrink(FRAME);
+            p.rect_filled(inner, 0.0, t.panel_bg);
+            let bar = Rect::from_min_size(inner.min, vec2(inner.width(), TITLE_H));
+            let fill = if front { t.menu_bar.lerp_to_gamma(t.accent, 0.45) } else { t.menu_bar.lerp_to_gamma(Color32::from_gray(90), 0.35) };
             p.rect_filled(bar, 0.0, fill);
+            p.hline(bar.x_range(), bar.max.y - 0.5, Stroke::new(1.0, Color32::from_black_alpha(200)));
+            p.rect_stroke(inner, 0.0, Stroke::new(1.0, Color32::from_black_alpha(200)), StrokeKind::Outside);
             p.with_clip_rect(Rect::from_min_max(bar.min, pos2(bar.max.x - 92.0, bar.max.y))).text(
                 bar.left_center() + vec2(8.0, 0.0),
                 Align2::LEFT_CENTER,
                 title(app, w),
                 bold(11.5),
-                if front { t.text } else { t.text_dim },
+                if front { Color32::WHITE } else { t.text_dim },
             );
             let drag =
                 ui.interact(Rect::from_min_max(bar.min, pos2(bar.max.x - 90.0, bar.max.y)), Id::unique(("mdi-title", edit)), Sense::click_and_drag());
@@ -324,7 +342,7 @@ fn window(app: &mut SoundApp, ctx: &egui::Context, desk: Rect, w: MainWindow) {
                 apply(app, w, act);
             }
             resize_edges(app, ui, rect, w);
-            Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max)
+            Rect::from_min_max(pos2(inner.min.x, bar.max.y), inner.max)
         };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(content).layout(egui::Layout::top_down(egui::Align::Min)));
         child.set_clip_rect(content.intersect(desk));
