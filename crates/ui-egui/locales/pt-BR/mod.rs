@@ -596,6 +596,7 @@ fn menu_translate(source: &str) -> Option<&'static str> {
         "MIDI Thru" => "MIDI Thru",
         "MIDI Track Offsets" => "Deslocamentos de faixa MIDI",
         "MIDI..." => "MIDI...",
+        "Pro Tools Session (.ptx)..." => "Sessão do Pro Tools (.ptx)...",
         "Machine Track Arming" => "Armar faixa da máquina",
         "Machine Track Arming Profiles..." => "Perfis de armação de faixa da máquina...",
         "Main Counter" => "Contador principal",

@@ -150,7 +150,11 @@ fn services() -> Services {
         pick_open: Some(Box::new(|purpose: &str, _exts: &[&str]| {
             let d = rfd::FileDialog::new();
             let d = match purpose {
-                "session.open" => d.add_filter("SoundCraft Session", &["scraft"]),
+                "session.open" => d
+                    .add_filter("Session", &["scraft", "ptx"])
+                    .add_filter("SoundCraft Session", &["scraft"])
+                    .add_filter("Pro Tools Session", &["ptx"]),
+                "file.open_pro_tools_session" => d.add_filter("Pro Tools Session", &["ptx"]),
                 "file.import_midi" => d.add_filter("MIDI", &["mid", "midi", "smf"]),
                 _ => d.add_filter("Audio", craft_audio::DECODE_EXTENSIONS),
             };

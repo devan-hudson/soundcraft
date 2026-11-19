@@ -4,7 +4,9 @@ impl SoundApp {
     /// Run a command; errors go to the status line. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let _language = crate::localization::enter(self.ui.language);
-        if matches!(id, "session.new" | "session.open" | "session.close" | "session.revert") && bounce::refuses_session_switch(self) {
+        if matches!(id, "session.new" | "session.open" | "file.open_pro_tools_session" | "session.close" | "session.revert")
+            && bounce::refuses_session_switch(self)
+        {
             return Err(self.ui.status.clone());
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
@@ -14,7 +16,7 @@ impl SoundApp {
             // Third-party plugins keep state the session can't see: store it first.
             self.capture_plugin_states();
         }
-        let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert");
+        let replacing = matches!(id, "session.new" | "session.open" | "file.open_pro_tools_session" | "session.close" | "session.revert");
         match self.engine.execute(id, &params) {
             Ok(v) => {
                 if replacing {

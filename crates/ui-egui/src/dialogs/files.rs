@@ -3,7 +3,7 @@ use super::{Dialog, SoundApp, Value, json};
 /// When `id` would close a session with unsaved changes, ask first; true when the question is
 /// open instead. A take in progress is stopped first, so it counts as a change.
 pub fn ask_to_save(app: &mut SoundApp, id: &str, params: &Value) -> bool {
-    if !matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "app.quit" | OPEN_PENDING)
+    if !matches!(id, "session.new" | "session.open" | "file.open_pro_tools_session" | "session.close" | "session.revert" | "app.quit" | OPEN_PENDING)
         || soundcraft_engine::find_command(id).is_some_and(|c| (c.enabled)(&app.engine).is_err())
     {
         return false;
@@ -44,8 +44,8 @@ pub fn unicode(path: &std::path::Path) -> Result<&str, NotUnicode> {
     path.to_str().ok_or_else(|| NotUnicode(path.to_path_buf()))
 }
 
-/// Opens a dropped, picked or command-line file by its extension: a session opens (asking to save
-/// first), MIDI imports, and anything else imports as audio, decoded in the background so a long
+/// Opens a dropped, picked or command-line file by its extension: a session (SoundCraft's own or a
+/// Pro Tools `.ptx`) opens (asking to save first), MIDI imports, and anything else imports as audio, decoded in the background so a long
 /// file doesn't freeze the window (#597). A name that is not valid Unicode goes on the status line.
 pub fn open_path(app: &mut SoundApp, path: &std::path::Path) {
     let p = match unicode(path) {
@@ -57,7 +57,7 @@ pub fn open_path(app: &mut SoundApp, path: &std::path::Path) {
         }
     };
     let lower = p.to_ascii_lowercase();
-    let r = if lower.ends_with(".scraft") {
+    let r = if lower.ends_with(".scraft") || lower.ends_with(".ptx") {
         run_or_ask(app, "session.open", json!({"path": p}))
     } else if lower.ends_with(".mid") || lower.ends_with(".midi") || lower.ends_with(".smf") {
         app.run("file.import_midi", json!({"path": p}))

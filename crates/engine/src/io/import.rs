@@ -152,6 +152,14 @@ fn decode_import_bytes(name: &str, bytes: &[u8], rate: u32) -> Result<(craft_aud
     Ok((info, Arc::new(SourceAudio::new(buf))))
 }
 
+/// Decode the audio file at `path` and add it to the session as a source, without placing a clip.
+pub(crate) fn add_file_source(e: &mut Engine, path: &str) -> Result<SourceId> {
+    let bytes = read_file(path)?;
+    let name = Path::new(path).file_name().and_then(OsStr::to_str).unwrap_or("Audio").to_string();
+    let (info, audio) = decode_import_bytes(&name, &bytes, e.session().sample_rate.hz())?;
+    Ok(add_source_audio(e.session_mut(), &name, audio, Some(path), FileFormat::of(&info)))
+}
+
 /// Decode and place an audio file. With no target track, a new track of matching width is made.
 pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option<&str>, target: Option<TrackId>, at: Samples) -> Result<Value> {
     let (info, audio) = decode_import_bytes(name, bytes, e.session().sample_rate.hz())?;
