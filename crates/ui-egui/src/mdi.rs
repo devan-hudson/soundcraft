@@ -48,7 +48,13 @@ pub struct Windows {
 
 impl Default for Windows {
     fn default() -> Self {
-        Windows { enabled: true, edit: ChildWindow::default(), mix: ChildWindow { rect: [64.0, 56.0, 1000.0, 620.0], ..ChildWindow::default() } }
+        // Mix opens when asked for (Window › Mix, Ctrl+=), as on the incumbent: until then,
+        // minimizing Edit leaves the main window empty with Edit's bar at the bottom.
+        Windows {
+            enabled: true,
+            edit: ChildWindow::default(),
+            mix: ChildWindow { open: false, rect: [64.0, 56.0, 1000.0, 620.0], ..ChildWindow::default() },
+        }
     }
 }
 
@@ -443,7 +449,11 @@ mod tests {
     #[test]
     fn minimizing_the_front_window_brings_the_other_forward() {
         let mut a = app();
-        a.ui.window = MainWindow::Edit;
+        // Mix starts closed: minimizing Edit then leaves Edit in front, minimized.
+        apply(&mut a, MainWindow::Edit, Act::Minimize);
+        assert_eq!(a.ui.window, MainWindow::Edit);
+        reveal(&mut a, MainWindow::Mix);
+        reveal(&mut a, MainWindow::Edit);
         apply(&mut a, MainWindow::Edit, Act::Minimize);
         assert!(a.ui.mdi.edit.minimized);
         assert_eq!(a.ui.window, MainWindow::Mix);

@@ -573,34 +573,46 @@ fn menu_modifier(ui: &mut Ui, app: &mut SoundApp, cmd: &str, selected: bool, lab
     });
 }
 
+/// Transport keys: about as wide as they are tall, as on the incumbent's transport, so the
+/// symbols keep their shape.
+const TOP_KEY: egui::Vec2 = egui::vec2(32.0, 25.0);
+const BOTTOM_KEY: egui::Vec2 = egui::vec2(32.0, 19.0);
+
+/// A square box for a transport symbol, centred in its key: a stretched box would draw a wide
+/// stop bar and a squat play triangle.
+fn square_icon(r: Rect) -> Rect {
+    let s = r.height().min(r.width()) * 0.62;
+    Rect::from_center_size(r.center(), vec2(s, s))
+}
+
 fn transport(app: &mut SoundApp, ui: &mut Ui) {
     let t = Tokens::current();
     let playing = app.is_playing();
     let recording = app.engine.transport.recording;
     let looped = app.engine.session().edit.loop_playback;
-    group(ui, 176.0, ROW, |ui, g| {
+    group(ui, 150.0, ROW, |ui, g| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                if icon_button(ui, vec2(38.0, 25.0), "loop", looped, "Loop Playback (Cmd+Shift+L)").clicked() {
+                if icon_button(ui, TOP_KEY, "loop", looped, "Loop Playback (Cmd+Shift+L)").clicked() {
                     let _ = app.run("options.loop_playback", json!({}));
                 }
-                let (r, resp) = ui.allocate_exact_size(vec2(38.0, 25.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(TOP_KEY, Sense::click());
                 key(ui.painter(), r, &resp, key_fill(&resp));
-                icons::draw(ui.painter(), r.shrink(5.0), "stop", if playing { t.text } else { t.accent });
+                icons::draw(ui.painter(), square_icon(r), "stop", if playing { t.text } else { t.accent });
                 if resp.on_hover_text(crate::localization::text("Stop (Space)")).clicked() {
                     let _ = app.run("transport.stop", json!({}));
                 }
-                let (r, resp) = ui.allocate_exact_size(vec2(38.0, 25.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(TOP_KEY, Sense::click());
                 key(ui.painter(), r, &resp, if playing { Color32::from_rgb(40, 90, 50) } else { key_fill(&resp) });
-                icons::draw(ui.painter(), r.shrink(5.0), "play", if playing { Color32::from_rgb(120, 255, 140) } else { t.counter_text });
+                icons::draw(ui.painter(), square_icon(r), "play", if playing { Color32::from_rgb(120, 255, 140) } else { t.counter_text });
                 if resp.on_hover_text(crate::localization::text("Play (Space)")).clicked() {
                     let _ = app.run("transport.play", json!({}));
                 }
-                let (r, resp) = ui.allocate_exact_size(vec2(38.0, 25.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(TOP_KEY, Sense::click());
                 key(ui.painter(), r, &resp, if recording { Color32::from_rgb(110, 30, 30) } else { key_fill(&resp) });
-                icons::draw(ui.painter(), r.shrink(5.0), "record", t.rec);
+                icons::draw(ui.painter(), square_icon(r), "record", t.rec);
                 // macOS gives Cmd+Space to Spotlight unless the user frees it, so name F12 first.
                 let resp = resp.on_hover_text(crate::localization::text("Record (F12 or Cmd+Space)"));
                 if let Some(why) = app.record_hint() {
@@ -620,7 +632,7 @@ fn transport(app: &mut SoundApp, ui: &mut Ui) {
                     ("ffwd", "transport.fast_forward", "Fast Forward"),
                     ("end", "transport.go_to_end", "Go to End (End)"),
                 ] {
-                    if icon_button(ui, vec2(38.0, 19.0), icon, false, tip).clicked() {
+                    if icon_button(ui, BOTTOM_KEY, icon, false, tip).clicked() {
                         let _ = app.run(cmd, json!({}));
                     }
                 }
