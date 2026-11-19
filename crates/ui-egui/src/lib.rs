@@ -24,6 +24,7 @@ pub mod fonts;
 pub mod icons;
 pub mod import;
 pub mod localization;
+pub mod mdi;
 pub mod menus;
 pub mod mix_window;
 pub mod palette;
@@ -141,6 +142,8 @@ pub struct UiState {
     /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
+    /// Edit and Mix as windows inside the main window (minimize, restore, maximize, close).
+    pub mdi: mdi::Windows,
     pub show_io_setup: bool,
     pub show_shortcuts: bool,
     pub show_clip_effects: bool,
@@ -219,6 +222,7 @@ impl Default for UiState {
             middle_c: preferences::MiddleC::default(),
             audio: soundcraft_playback::AudioConfig::default(),
             mix_separate: false,
+            mdi: mdi::Windows::default(),
             show_io_setup: false,
             show_shortcuts: false,
             show_clip_effects: false,
@@ -343,6 +347,10 @@ pub struct SoundApp {
     pub preferences: preferences::PreferencesState,
     /// Bring the separate Mix window to the front on the next frame.
     pub(crate) focus_mix: bool,
+    /// The Edit or Mix window to raise above the other on the next frame.
+    pub(crate) mdi_raise: Option<MainWindow>,
+    /// The front window as of the last frame, so a change made elsewhere brings it forward.
+    pub(crate) mdi_seen_front: Option<MainWindow>,
     /// Scroll Into View: the track each window brings to its top (Edit) or left (Mix) when it
     /// next draws, so a window not on screen catches up when it is shown.
     pub(crate) edit_scroll_into_view: Option<TrackId>,

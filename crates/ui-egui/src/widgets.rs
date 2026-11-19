@@ -287,7 +287,6 @@ pub fn knob_cap(p: &Painter, c: Pos2, r: f32, angle: f32, hot: bool) {
 
 /// Rotary knob for pan / send pan (-1..1). Drag vertically; double-click resets.
 pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response {
-    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), tip));
     if resp.dragged() {
@@ -297,27 +296,47 @@ pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response 
     if resp.double_clicked() {
         *value = 0.0;
     }
-    let p = ui.painter();
-    let c = r.center();
-    let rad = size * 0.42;
-    let n = 24;
+    pan_dial(ui.painter(), r.center(), size, *value, resp.hovered() || resp.dragged());
+    resp.on_hover_text(tip)
+}
+
+/// A console pan dial `size` across at `c`: a small flat knob with a white pointer, in a dark
+/// groove whose lit arc runs from the centre detent (12 o'clock) out to the pan position.
+pub fn pan_dial(p: &Painter, c: Pos2, size: f32, value: f32, hot: bool) {
+    let t = Tokens::current();
+    let g = Color32::from_gray;
+    let value = if value.is_finite() { value.clamp(-1.0, 1.0) } else { 0.0 };
+    let ring = size * 0.44;
+    let knob = size * 0.30;
+    // 7:30 to 4:30 through 12 o'clock, as on a console.
     let start = std::f32::consts::PI * 0.75;
     let sweep = std::f32::consts::PI * 1.5;
-    let arc = |a0: f32, a1: f32| -> Vec<egui::Pos2> {
-        (0..=n)
-            .map(|i| {
-                let a = a0 + (a1 - a0) * i as f32 / n as f32;
-                c + vec2(a.cos(), a.sin()) * (rad + 2.5)
-            })
-            .collect()
-    };
     let mid = start + sweep * 0.5;
-    let at = start + sweep * (*value * 0.5 + 0.5);
+    let at = start + sweep * (value * 0.5 + 0.5);
+    let arc = |a0: f32, a1: f32, rad: f32| -> Vec<Pos2> {
+        let n = (((a1 - a0).abs() / 0.08).ceil() as usize).max(2);
+        (0..=n).map(|i| c + vec2((a0 + (a1 - a0) * i as f32 / n as f32).cos(), (a0 + (a1 - a0) * i as f32 / n as f32).sin()) * rad).collect()
+    };
+    // The groove the lit arc runs in.
+    p.add(Shape::line(arc(start, start + sweep, ring), Stroke::new(3.2, Color32::from_black_alpha(200))));
+    p.add(Shape::line(arc(start, start + sweep, ring), Stroke::new(1.6, g(46))));
     let (a0, a1) = if at < mid { (at, mid) } else { (mid, at) };
-    p.add(egui::Shape::line(arc(start, start + sweep), Stroke::new(2.0, t.meter_bg)));
-    p.add(egui::Shape::line(arc(a0, a1), Stroke::new(2.0, t.counter_text)));
-    knob_cap(p, c, rad, at, resp.hovered() || resp.dragged());
-    resp.on_hover_text(tip)
+    if (a1 - a0).abs() > 0.01 {
+        let lit = t.counter_text.lerp_to_gamma(Color32::WHITE, 0.25);
+        p.add(Shape::line(arc(a0, a1, ring), Stroke::new(2.2, lit)));
+    }
+    // Centre detent mark.
+    let top = vec2(mid.cos(), mid.sin());
+    p.line_segment([c + top * (ring + 2.0), c + top * (ring + 4.5)], Stroke::new(1.2, g(150)));
+    // The knob: a flat dark cap with a thin bright rim at the top.
+    p.circle_filled(c + vec2(0.0, 1.2), knob + 1.0, Color32::from_black_alpha(140));
+    let lift = if hot { 16 } else { 0 };
+    gradient_disc(p, c, knob, g(84 + lift), g(34 + lift / 2));
+    gradient_disc(p, c, knob - 1.6, g(58 + lift), g(40 + lift));
+    p.circle_stroke(c, knob, Stroke::new(1.0, Color32::from_black_alpha(220)));
+    // Pointer: a white line from near the centre out to the rim.
+    let d = vec2(at.cos(), at.sin());
+    p.line_segment([c + d * (knob * 0.25), c + d * (knob - 1.0)], Stroke::new(1.8, Color32::from_white_alpha(235)));
 }
 
 /// Format a pan value like a console: "<45", "0", "45>".

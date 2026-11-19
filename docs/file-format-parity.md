@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-11-11 · **Change:** minor (audio formats come from craft-audio; previously trivial: bounces carry a BWF time reference, #1296) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-11-18 · **Change:** minor (Pro Tools `.ptx` sessions open; previously minor: audio formats come from craft-audio) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every format Pro Tools reads or writes, and ours. The Pro Tools list comes from the document types
 its bundle declares (`CFBundleDocumentTypes` in Info.plist: names only, nothing else read) and its
@@ -17,7 +17,7 @@ Legend: ✅ supported and tested · 🟡 partial · ❌ missing · — not appli
 
 | Format | Pro Tools | Read | Write | Tests / notes |
 |---|---|---|---|---|
-| Pro Tools session `.ptx` (and `.ptf` from 7–9) | native | ❌ | ❌ | Proprietary, undocumented. Owner decision needed on black-box format study (G-03) |
+| Pro Tools session `.ptx` (and `.ptf` from 7–9) | native | 🟡 | ❌ | `.ptx` opens (File › Open Session or File › Import › Pro Tools Session): tracks, audio clips with offset/length, fades, clip gain, fader, pan, markers, first tempo. Clean-room reader (`crates/engine/src/io/ptx.rs`) worked out from sessions saved by Pro Tools one change at a time; unit tests on synthetic files. Not yet: plugins, sends, automation, MIDI, tempo changes after bar 1, `.ptf` |
 | Session templates `.ptxt` | read/write | ❌ | ❌ | We have no templates at all (G-16) |
 | AAF (Advanced Authoring Format) | import/export | ❌ | ❌ | #40. The post-production handoff from picture editors (G-03) |
 | OMF | import/export | ❌ | ❌ | Legacy, still delivered by some editors |
@@ -81,6 +81,7 @@ Legend: ✅ supported and tested · 🟡 partial · ❌ missing · — not appli
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Pro Tools `.ptx` sessions open as new sessions (tracks, clips, fades, clip gain, fader, pan, markers, tempo) |
 | 2026-11-11 | minor | Audio formats come from `craft-audio` (craft-libs); `crates/audio-io` is gone. New on import: Opus, AC-3/E-AC-3, `.mov`/`.mka` audio; AAC, ALAC and MP2 no longer go through symphonia; `.aifc` is a writable name |
 | 2026-11-02 | trivial | WAV bounces (mix and stems) write a `bext` TimeReference: session timecode start plus bounce start (#1296) |
 | 2026-10-19 | trivial | WAV and AIFF-C Float32 encoders retain finite headroom (#791); whole-file, streaming and bounce regression tests |

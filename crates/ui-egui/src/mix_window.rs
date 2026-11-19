@@ -224,17 +224,24 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     y = object_section(app, ui, &cx, y);
     y = slot_sections(app, ui, &cx, y);
     y = eq_section(ui, &cx, y);
-    y = comments_section(app, ui, &cx, y);
     y = io_section(app, ui, &cx, y);
     y = group_selector(app, ui, &cx, y);
     y = pan_section(app, ui, &cx, y);
     y = toggle_rows(app, ui, &cx, y);
     // Faders keep a console's length, as the incumbent's do, rather than stretching with the
-    // window: the strip ends below its name plate and the rest of the window stays empty.
-    let bottom = r.max.y.min(y + MAX_FADER_H + STRIP_FOOT_H);
+    // window. The strip still runs to the bottom of the window: the room under the name plate
+    // holds the track's comments, a notepad for the track as on the incumbent's console view.
+    let fader_bottom = (y + MAX_FADER_H + STRIP_FOOT_H).min(r.max.y);
+    let notes_room = r.max.y - fader_bottom;
+    let bottom = if notes_room < NOTES_MIN_H && cx.shows("comments") {
+        // Comments switched on in a short window: the fader gives up some length for them.
+        (r.max.y - NOTES_MIN_H).max(y + MIN_FADER_H + STRIP_FOOT_H).min(r.max.y)
+    } else {
+        fader_bottom
+    };
     let mut cx = cx;
     cx.r = Rect::from_min_max(r.min, pos2(r.max.x, bottom));
-    let sr = cx.r;
+    let sr = r;
     let mut mesh = egui::Mesh::default();
     let top = shade(bg, 0.06);
     for (p, c) in [(sr.left_top(), top), (sr.right_top(), top), (sr.left_bottom(), bg), (sr.right_bottom(), bg)] {
@@ -248,7 +255,16 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     );
     fader_and_meter(app, ui, &cx, y, snap);
     name_and_readout(app, ui, &cx);
+    let notes = Rect::from_min_max(pos2(x0, bottom + 2.0), pos2(x0 + inner_w, r.max.y - 4.0));
+    if notes.height() >= NOTES_MIN_H * 0.5 {
+        comments_box(app, ui, &cx, notes);
+    }
 }
+
+/// The shortest the comments box gets when the Comments view is switched on.
+const NOTES_MIN_H: f32 = 56.0;
+/// The shortest a fader gets to make room for comments.
+const MIN_FADER_H: f32 = 120.0;
 
 /// The longest a strip's fader (with its meter) gets, in points.
 const MAX_FADER_H: f32 = 260.0;
@@ -390,24 +406,37 @@ fn eq_section(ui: &mut Ui, cx: &StripCtx<'_>, mut y: f32) -> f32 {
     y
 }
 
-/// The comments field.
-fn comments_section(app: &mut SoundApp, ui: &mut Ui, cx: &StripCtx<'_>, mut y: f32) -> f32 {
-    let StripCtx { track, id, narrow, x0, inner_w, .. } = *cx;
-    if cx.shows("comments") {
-        let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 44.0));
-        let mut c = track.comments.clone();
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(sec));
-        let hint = if narrow { "" } else { crate::localization::text("comments") };
-        let field = crate::widgets::named_text_field(
-            child.add(egui::TextEdit::multiline(&mut c).desired_width(inner_w).desired_rows(2).hint_text(hint).font(regular(10.0))),
-            &crate::localized_format!("Comments for {}", track.name),
-        );
-        if field.changed() {
-            let _ = app.engine.execute_merged("track.comments", &json!({"track": id.0, "comments": c}), &format!("comments:{}", id.0));
-        }
-        y = sec.max.y + 4.0;
+/// The track's comments, in the room under the strip's name plate: a small titled notepad.
+fn comments_box(app: &mut SoundApp, ui: &mut Ui, cx: &StripCtx<'_>, sec: Rect) {
+    let StripCtx { track, id, narrow, inner_w, .. } = *cx;
+    let t = Tokens::current();
+    let title = Rect::from_min_size(sec.min, vec2(inner_w, 13.0));
+    ui.painter().text(
+        title.center(),
+        Align2::CENTER_CENTER,
+        crate::localization::text(if narrow { "NOTES" } else { "COMMENTS" }),
+        bold(8.5),
+        t.section_label,
+    );
+    let field_r = Rect::from_min_max(pos2(sec.min.x, title.max.y + 1.0), sec.max);
+    inset(ui.painter(), field_r, t.counter_bg);
+    let mut c = track.comments.clone();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field_r.shrink(2.0)));
+    let rows = ((field_r.height() - 4.0) / 12.0).floor().max(1.0) as usize;
+    let field = crate::widgets::named_text_field(
+        child.add(
+            egui::TextEdit::multiline(&mut c)
+                .frame(egui::Frame::NONE)
+                .desired_width(field_r.width() - 4.0)
+                .desired_rows(rows)
+                .hint_text(egui::RichText::new(crate::localization::text("notes")).size(10.0))
+                .font(regular(10.0)),
+        ),
+        &crate::localized_format!("Comments for {}", track.name),
+    );
+    if field.changed() {
+        let _ = app.engine.execute_merged("track.comments", &json!({"track": id.0, "comments": c}), &format!("comments:{}", id.0));
     }
-    y
 }
 
 /// Whether a track shows an input selector. A master fader has no input of its own:

@@ -327,6 +327,17 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                                         let _ = run_ui_command(app, "window.mix_separate", &json!({"value": separate}));
                                         ui.close();
                                     }
+                                    let mut windows = app.ui.mdi.enabled;
+                                    if ui
+                                        .checkbox(&mut windows, crate::localization::text("Edit and Mix as Windows"))
+                                        .on_hover_text(crate::localization::text(
+                                            "Edit and Mix get minimize, restore and close buttons and can be moved and resized",
+                                        ))
+                                        .changed()
+                                    {
+                                        app.ui.mdi.enabled = windows;
+                                        ui.close();
+                                    }
                                 }
                             })
                         });
@@ -343,6 +354,7 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     }
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    crate::mdi::menu_bar_buttons(app, ui);
                     ui.label(egui::RichText::new(title).color(t.text_dim));
                 });
             });
@@ -637,7 +649,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             json!({})
         }
         "window.mix" => {
-            app.ui.window = MainWindow::Mix;
+            crate::mdi::reveal(app, MainWindow::Mix);
             app.focus_mix = app.ui.mix_separate;
             json!({"window": "mix"})
         }
@@ -647,7 +659,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             v
         }
         "window.edit" => {
-            app.ui.window = MainWindow::Edit;
+            crate::mdi::reveal(app, MainWindow::Edit);
             json!({"window": "edit"})
         }
         "window.toggle_mix_edit" => {
@@ -655,7 +667,8 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
                 // Both are on screen: bring the Mix window forward instead.
                 app.focus_mix = true;
             } else {
-                app.ui.window = if app.ui.window == MainWindow::Edit { MainWindow::Mix } else { MainWindow::Edit };
+                let next = if app.ui.window == MainWindow::Edit { MainWindow::Mix } else { MainWindow::Edit };
+                crate::mdi::reveal(app, next);
             }
             json!({"window": app.ui.window})
         }

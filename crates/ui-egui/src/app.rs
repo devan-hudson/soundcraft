@@ -66,6 +66,8 @@ impl SoundApp {
             palette: palette::PaletteState::default(),
             preferences: preferences::PreferencesState::default(),
             focus_mix: false,
+            mdi_raise: None,
+            mdi_seen_front: None,
             edit_scroll_into_view: None,
             mix_scroll_into_view: None,
             synthetic: Vec::new(),
@@ -331,9 +333,13 @@ impl SoundApp {
             menus::menu_bar(self, ui);
         }
         // With the Mix window in its own native window, the main window keeps Edit.
-        match if self.ui.mix_separate { MainWindow::Edit } else { self.ui.window } {
-            MainWindow::Edit => edit_window::show(self, ui),
-            MainWindow::Mix => mix_window::show(self, ui),
+        if self.ui.mdi.enabled && !self.ui.mix_separate {
+            crate::mdi::show(self, ui);
+        } else {
+            match if self.ui.mix_separate { MainWindow::Edit } else { self.ui.window } {
+                MainWindow::Edit => edit_window::show(self, ui),
+                MainWindow::Mix => mix_window::show(self, ui),
+            }
         }
         if self.ui.mix_separate {
             mix_window::show_separate(self, &ctx);

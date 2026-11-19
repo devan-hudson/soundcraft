@@ -145,6 +145,16 @@ pub(super) fn translate(source: &str) -> Option<&'static str> {
         "Minimal" => "Mínimo",
         "Mix group" => "Grupo de mixagem",
         "Mix in Separate Window" => "Mixagem em janela separada",
+        "Edit and Mix as Windows" => "Edit e Mix como janelas",
+        "Edit and Mix get minimize, restore and close buttons and can be moved and resized" => {
+            "Edit e Mix ganham botões de minimizar, restaurar e fechar e podem ser movidas e redimensionadas"
+        }
+        "Window › Edit or Window › Mix opens a window" => "Janela › Edit ou Janela › Mix abre uma janela",
+        "Close" => "Fechar",
+        "Restore Down" => "Restaurar tamanho",
+        "Maximize" => "Maximizar",
+        "Minimize" => "Minimizar",
+        "Restore" => "Restaurar",
         "Modify Group…" => "Modificar grupo…",
         "Move to Folder" => "Mover para pasta",
         "Name" => "Nome",
@@ -1245,6 +1255,7 @@ fn menu_translate(source: &str) -> Option<&'static str> {
         "Bounce cancelled" => "Bounce cancelado",
         "CLIPS" => "CLIPES",
         "COMMENTS" => "COMENTÁRIOS",
+        "NOTES" => "NOTAS",
         "Change" => "Alterar",
         "Check the audio device, then use Reconnect audio device in Setup › Playback Engine." => {
             "Verifique o dispositivo de áudio e use Reconectar dispositivo de áudio em Configurar › Mecanismo de reprodução."

@@ -224,6 +224,7 @@ fn new_session(e: &mut Engine, p: &Value) -> Result<Value> {
         SampleRate::new(i64_or(p, "sample_rate", 48_000).clamp(0, i64::from(u32::MAX)) as u32).map_err(|err| bad("session.new", err.to_string()))?;
     let mut s = if str_param(p, "template") == Some("demo") { crate::demo::demo_session() } else { Session::new(name.clone(), sr) };
     s.name = name;
+    show_default_edit_columns(&mut s);
     if let Some(b) = p.get("bit_depth") {
         s.bit_depth = match b.to_string().trim_matches('"') {
             "16" => soundcraft_model::BitDepthSetting::Int16,
@@ -234,6 +235,14 @@ fn new_session(e: &mut Engine, p: &Value) -> Result<Value> {
     e.replace_session(s);
     e.path = None;
     Ok(json!({"name": e.session().name, "sample_rate": e.session().sample_rate.hz()}))
+}
+
+/// A new session's Edit window shows the columns the incumbent's does out of the box: inserts,
+/// sends and I/O beside each track, so plugins can be added from the Edit window.
+pub(crate) fn show_default_edit_columns(s: &mut Session) {
+    for col in ["edit_view.inserts_ae", "edit_view.sends_ae", "edit_view.io"] {
+        s.edit.set_flag(col, true);
+    }
 }
 
 fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {

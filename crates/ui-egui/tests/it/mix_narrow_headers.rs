@@ -3,7 +3,7 @@ use serde_json::json;
 use soundcraft_ui_egui::mix_window::strip_width;
 use soundcraft_ui_egui::{Services, SoundApp};
 
-const FULL: [&str; 7] = ["INSERTS A-E", "INSERTS F-J", "SENDS A-E", "SENDS F-J", "INSTRUMENT", "comments", "no group"];
+const FULL: [&str; 7] = ["INSERTS A-E", "INSERTS F-J", "SENDS A-E", "SENDS F-J", "INSTRUMENT", "COMMENTS", "no group"];
 const SHORT: [&str; 6] = ["I A-E", "I F-J", "S A-E", "S F-J", "INST", "nogrp"];
 
 /// egui's built-in fonts only, as on a system with no fonts installed (the FreeBSD CI VM): the

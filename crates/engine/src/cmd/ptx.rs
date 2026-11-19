@@ -68,6 +68,7 @@ fn locate(dir: &Path, name: &str, stored: Option<&str>) -> Option<PathBuf> {
 fn build(e: &mut Engine, ptx: &PtxSession, name: &str, dir: &Path) -> Result<Value> {
     let rate = SampleRate::new(ptx.sample_rate).map_err(|err| bad(ID, err.to_string()))?;
     let mut s = Session::new(name, rate);
+    super::file::show_default_edit_columns(&mut s);
     s.bit_depth = match ptx.bit_depth {
         16 => soundcraft_model::BitDepthSetting::Int16,
         32 => soundcraft_model::BitDepthSetting::Float32,
